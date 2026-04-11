@@ -9,6 +9,7 @@ members = [
     "crates/core",
     "crates/transport/websocket",
     "crates/transport/asterisk",
+    "crates/server",
 ]
 
 [workspace.dependencies]
@@ -22,3 +23,5 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
 async-trait = "0.1"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
