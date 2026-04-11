@@ -1,6 +1,6 @@
 # PLAN — voicebot-rs
 
-> 59 tests passing · 8 crates · Milestones 1–7 scaffolded
+> 62 tests passing · 9 crates · Milestones 1–4 complete, 5–7 scaffolded, 8+10 partial
 
 ---
 
@@ -10,14 +10,14 @@
 | --- | --- | --- | --: | --- |
 | 1 | **common** — types, traits, errors, config, retry | ✅ Done | 19 | `AudioFrame`, `PipelineEvent`, provider traits, `SessionConfig`, env-var substitution, `with_retry`, `TestAudioStream` |
 | 2 | **vad** — energy-threshold VAD | ✅ Done | 11 | `rms_energy`, `is_voiced`, `FrameChunker`, `VadComponent` state machine |
-| 3 | **core** — orchestrator + session + stubs | ✅ Done | 8 | `Orchestrator` (Idle→Listening→Transcribing→AgentThinking→Speaking), `PipelineSession`, stub providers, 4 integration tests |
+| 3 | **core** — orchestrator + session + stubs | ✅ Done | 11 | `Orchestrator` with provider triggering, `PipelineSession` with audio fanout, 7 integration tests (3 E2E) |
 | 4 | **transport/websocket** — WS server + protocol | ✅ Done | 6 | Axum handler, `ClientMessage`/`ServerMessage` JSON, bidirectional bridge, audio frame parsing |
 | 5 | **asr** — Deepgram provider | 🟡 Partial | 4 | `DeepgramProvider` WS streaming impl, JSON response parsing. **Missing:** integration test with real audio, Whisper fallback |
 | 6 | **agent** — OpenAI provider + tool loop | 🟡 Partial | 7 | `OpenAiProvider` SSE streaming, `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, `Tool` trait. **Missing:** integration test, concrete tool impls, Anthropic fallback |
 | 7 | **tts** — ElevenLabs provider | 🟡 Partial | 4 | `ElevenLabsProvider` WS streaming, base64 decode, cancel. **Missing:** integration test, sentence-boundary streaming wiring, Coqui fallback |
-| 8 | **Integration** — end-to-end with interrupt | ❌ Not started | 0 | No real E2E test, `tests/fixtures/audio/` is empty |
+| 8 | **Integration** — end-to-end with interrupt | 🟡 Partial | 3 | E2E stub tests (full flow + explicit providers + terminate). **Missing:** interrupt E2E test, backpressure test, audio fixtures |
 | 9 | **transport/asterisk** — ARI adapter | ❌ Not started | 0 | `lib.rs` is empty. Needs μ-law/A-law codec, RTP jitter buffer, DTMF mapping |
-| 10 | **Observability** — metrics, config validation, fallbacks | ❌ Not started | 0 | Only basic `init_tracing()`. No Prometheus metrics, no fallback provider wiring |
+| 10 | **Observability** — metrics, config validation, fallbacks | 🟡 Partial | 0 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown. **Missing:** fallback provider wiring, session metrics in session.rs |
 
 ---
 
@@ -35,9 +35,11 @@
 
 ### Priority 2 — End-to-end integration (M8)
 
-- [ ] **Audio fixtures** — add WAV files to `tests/fixtures/audio/` (silence, Thai speech, English speech)
-- [ ] **E2E test with stubs** — full pipeline: audio → VAD → ASR → Agent → TTS → egress
+- [x] **E2E test with stubs** — full pipeline: audio → VAD → ASR → Agent → TTS → egress
+- [x] **E2E test with explicit providers** — verify provider injection works
+- [x] **Terminate cancels tasks** — verify session cleanup
 - [ ] **E2E test with interrupt** — verify interrupt cancels TTS+LLM, returns to Idle
+- [ ] **Audio fixtures** — add WAV files to `tests/fixtures/audio/`
 - [ ] **FinalTranscript never-drop test** — verify backpressure doesn't lose transcripts
 
 ### Priority 3 — Asterisk transport (M9)
@@ -49,11 +51,12 @@
 
 ### Priority 4 — Observability + hardening (M10)
 
-- [ ] **Prometheus metrics** — add `metrics` + `metrics-exporter-prometheus` crates, instrument all 9 required metrics
+- [x] **Prometheus metrics** — `metrics` + `metrics-exporter-prometheus`, 9 metrics instrumented
+- [x] **Config fail-fast** — validate all required keys present at startup, error on missing `${VAR}`
+- [x] **Binary entry point** — `voicebot-server` crate with `main.rs`, loads config, inits tracing+metrics, starts Axum server
+- [x] **Graceful shutdown** — `SIGTERM`/`SIGINT` handler via `axum::serve::with_graceful_shutdown`
 - [ ] **Fallback provider wiring** — primary/fallback config in `core::session`, auto-switch on retry exhaustion
-- [ ] **Config fail-fast** — validate all required keys present at startup, error on missing `${VAR}`
-- [ ] **Binary entry point** — `main.rs` that loads config, inits tracing+metrics, starts Axum server
-- [ ] **Graceful shutdown** — `SIGTERM` handler, drain sessions within 5s
+- [ ] **Session metrics** — `session_started()`/`session_ended()` calls in `PipelineSession`
 
 ---
 
@@ -66,10 +69,11 @@ voicebot/crates/
   asr/              4 tests   ← DeepgramProvider, StubAsrProvider
   agent/            7 tests   ← OpenAiProvider, AgentCore, ConversationMemory, Tool trait
   tts/              4 tests   ← ElevenLabsProvider, StubTtsProvider
-  core/             8 tests   ← Orchestrator, PipelineSession, observability
+  core/            11 tests   ← Orchestrator (with provider triggering), PipelineSession, observability (Prometheus)
   transport/
     websocket/      6 tests   ← Axum WS handler, JSON protocol
     asterisk/       0 tests   ← (empty)
+  server/           0 tests   ← Binary entry point (main.rs)
 ```
 
 ## Build & Test
@@ -77,6 +81,7 @@ voicebot/crates/
 ```bash
 cd voicebot
 source "$HOME/.cargo/env"
-cargo test --workspace                    # all 59 tests
+cargo test --workspace                    # all 62 tests
 cargo test --workspace -- --ignored       # integration tests (need API keys)
+cargo run -p voicebot-server              # start server (needs config.toml + env vars)
 ```
