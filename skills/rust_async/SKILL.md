@@ -1,3 +1,7 @@
+---
+name: Rust Async
+---
+
 # Skill: Rust Async Patterns
 
 Use this whenever writing async code in this project.

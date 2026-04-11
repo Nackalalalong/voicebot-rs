@@ -1,6 +1,10 @@
+---
+name: Agent Tool Calling
+---
+
 # Skill: Agent Tool Calling
 
-Use this whenever working on the agent core in `/crates/agent`, including the tool-calling loop, conversation memory, sentence-boundary streaming to TTS, or the `Tool` trait.
+Use this whenever working on the agent core in `voicebot/crates/agent`, including the tool-calling loop, conversation memory, sentence-boundary streaming to TTS, or the `Tool` trait.
 
 ## AgentCore struct
 

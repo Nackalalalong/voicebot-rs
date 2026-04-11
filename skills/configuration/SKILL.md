@@ -1,6 +1,10 @@
+---
+name: Configuration
+---
+
 # Skill: Configuration
 
-Use this whenever working on config loading, environment variable substitution, startup validation, or provider factory setup in `/crates/common` or `/crates/core`.
+Use this whenever working on config loading, environment variable substitution, startup validation, or provider factory setup in `voicebot/crates/common` or `voicebot/crates/core`.
 
 ## Config file location
 

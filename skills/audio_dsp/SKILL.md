@@ -1,3 +1,7 @@
+---
+name: Audio DSP
+---
+
 # Skill: Audio DSP and Format Handling
 
 Use this whenever dealing with audio data, codec conversion, or VAD/ASR input preparation.
@@ -5,13 +9,13 @@ Use this whenever dealing with audio data, codec conversion, or VAD/ASR input pr
 ## Canonical internal format
 
 All audio inside the core pipeline is:
+
 - Sample rate: 16000 Hz
 - Channels: 1 (mono)
 - Bit depth: 16-bit signed integer (i16)
 - Frame size: 320 samples = 20ms at 16kHz
 
-**Adapters convert to this format before calling `AudioInputStream::recv()`.**
-The core pipeline never handles raw RTP, μ-law, A-law, or float samples.
+**Adapters convert to this format before calling `AudioInputStream::recv()`.** The core pipeline never handles raw RTP, μ-law, A-law, or float samples.
 
 ## Format conversion helpers
 
@@ -88,8 +92,9 @@ pub fn frame_to_bytes(frame: &AudioFrame) -> Vec<u8> {
 ## VAD frame sizing
 
 WebRTC VAD requires exact frame sizes. Valid options at 16kHz:
+
 - 160 samples = 10ms
-- 320 samples = 20ms  ← preferred
+- 320 samples = 20ms ← preferred
 - 480 samples = 30ms
 
 If incoming frames are not exactly 320 samples, buffer and chunk:

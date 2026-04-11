@@ -1,3 +1,7 @@
+---
+name: Testing Conventions
+---
+
 # Skill: Testing Conventions
 
 Use this whenever writing tests for any crate in this project.
@@ -193,6 +197,7 @@ impl AsrProvider for MockAsrProvider {
 ## Audio fixtures
 
 Place WAV files in `tests/fixtures/audio/`:
+
 - `silence_1s.wav` — 1s of silence
 - `speech_thai_hello.wav` — "สวัสดีครับ" in Thai
 - `speech_en_hello.wav` — "Hello, how can I help you?" in English

@@ -1,3 +1,7 @@
+---
+name: Error Handling and Fault Tolerance
+---
+
 # Skill: Error Handling and Fault Tolerance
 
 Use this whenever writing error types, retry logic, or fallback handling.
@@ -52,8 +56,7 @@ impl ComponentError for AsrError {
 
 ## Converting errors to PipelineEvent
 
-Components do NOT emit `PipelineEvent::ComponentError` themselves.
-They return `Err(...)` to the orchestrator, which decides what to emit.
+Components do NOT emit `PipelineEvent::ComponentError` themselves. They return `Err(...)` to the orchestrator, which decides what to emit.
 
 ```rust
 // Wrong — component emits the error event directly
@@ -83,11 +86,11 @@ match asr_result {
 ## Retry matrix
 
 | Component | Max retries | Base delay | Strategy    |
-|-----------|------------|------------|-------------|
-| ASR       | 3          | 200ms      | linear      |
-| LLM       | 2          | 500ms      | exponential |
-| TTS       | 2          | 300ms      | linear      |
-| WebSocket | 5          | 1000ms     | exponential |
+| --------- | ----------- | ---------- | ----------- |
+| ASR       | 3           | 200ms      | linear      |
+| LLM       | 2           | 500ms      | exponential |
+| TTS       | 2           | 300ms      | linear      |
+| WebSocket | 5           | 1000ms     | exponential |
 
 Use the `with_retry` helper from `common::retry` (see provider-integration skill).
 
@@ -124,12 +127,12 @@ impl AsrProvider for FallbackAsrProvider {
 
 When components fail beyond recovery:
 
-| Failure         | Degradation response                                    |
-|-----------------|--------------------------------------------------------|
-| TTS fails       | Send transcript text as `{ "type": "agent_final", "text": "..." }` JSON to egress |
-| ASR fails       | Send `{ "type": "error", "code": "asr_unavailable" }` to client, keep session alive |
-| LLM fails       | Send `{ "type": "error", "code": "llm_unavailable" }`, attempt with fallback provider |
-| Both ASR+LLM    | Terminate session gracefully with error code |
+| Failure | Degradation response |
+| --- | --- |
+| TTS fails | Send transcript text as `{ "type": "agent_final", "text": "..." }` JSON to egress |
+| ASR fails | Send `{ "type": "error", "code": "asr_unavailable" }` to client, keep session alive |
+| LLM fails | Send `{ "type": "error", "code": "llm_unavailable" }`, attempt with fallback provider |
+| Both ASR+LLM | Terminate session gracefully with error code |
 
 ## Session termination on error
 

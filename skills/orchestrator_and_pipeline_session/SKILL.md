@@ -1,6 +1,10 @@
+---
+name: Orchestrator and Pipeline Session
+---
+
 # Skill: Orchestrator and Pipeline Session
 
-Use this whenever working on the orchestrator state machine, session lifecycle, channel wiring, event routing, or interrupt/cancel handling in `/crates/core`.
+Use this whenever working on the orchestrator state machine, session lifecycle, channel wiring, event routing, or interrupt/cancel handling in `voicebot/crates/core`.
 
 ## Orchestrator state machine
 

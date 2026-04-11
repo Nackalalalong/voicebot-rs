@@ -1,3 +1,7 @@
+---
+name: Observability
+---
+
 # Skill: Observability
 
 Use this whenever adding metrics, structured logging, tracing spans, or Prometheus instrumentation to any crate.

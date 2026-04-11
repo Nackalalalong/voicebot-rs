@@ -2,7 +2,7 @@
 
 ## Skills
 
-All agent skills live in `skills/<name>/<name>.md`. Read the relevant skill before working on that area.
+All agent skills live in `skills/<name>/SKILL.md`. Read the relevant skill before working on that area.
 
 | Skill | When to use |
 | --- | --- |

@@ -1,4 +1,8 @@
-# Skill: External Provider Integration
+---
+name: Provider Integration
+---
+
+# Skill: Provider Integration
 
 Use this whenever integrating with Deepgram, OpenAI, Anthropic, ElevenLabs, or any external streaming API.
 
@@ -12,13 +16,13 @@ Use this whenever integrating with Deepgram, OpenAI, Anthropic, ElevenLabs, or a
 
 ## Timeouts (do not adjust without updating this file)
 
-| Provider    | Connection timeout | Response timeout | Stream idle timeout |
-|-------------|-------------------|-----------------|---------------------|
-| Deepgram    | 5s                | —               | 10s                 |
-| OpenAI      | 5s                | 60s             | 30s                 |
-| Anthropic   | 5s                | 60s             | 30s                 |
-| ElevenLabs  | 5s                | —               | 10s                 |
-| Whisper     | —                 | 30s             | —                   |
+| Provider   | Connection timeout | Response timeout | Stream idle timeout |
+| ---------- | ------------------ | ---------------- | ------------------- |
+| Deepgram   | 5s                 | —                | 10s                 |
+| OpenAI     | 5s                 | 60s              | 30s                 |
+| Anthropic  | 5s                 | 60s              | 30s                 |
+| ElevenLabs | 5s                 | —                | 10s                 |
+| Whisper    | —                  | 30s              | —                   |
 
 ## Retry logic (shared helper)
 
