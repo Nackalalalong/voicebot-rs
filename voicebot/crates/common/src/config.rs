@@ -34,6 +34,7 @@ pub struct AsrConfigGroup {
     pub fallback: Option<String>,
     pub deepgram: Option<DeepgramConfig>,
     pub whisper: Option<WhisperConfig>,
+    pub speaches: Option<SpeachesAsrConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,6 +47,14 @@ pub struct DeepgramConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct WhisperConfig {
     pub model_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpeachesAsrConfig {
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +83,7 @@ pub struct AnthropicConfig {
 pub struct TtsConfigGroup {
     pub elevenlabs: Option<ElevenLabsConfig>,
     pub coqui: Option<CoquiConfig>,
+    pub speaches: Option<SpeachesTtsConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +95,14 @@ pub struct ElevenLabsConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CoquiConfig {
     pub model_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpeachesTtsConfig {
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub voice: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,6 +197,13 @@ fn validate_config(config: &AppConfig) -> Result<(), ConfigError> {
             if config.asr.whisper.is_none() {
                 return Err(ConfigError::Invalid(
                     "asr.primary is 'whisper' but [asr.whisper] section is missing".into(),
+                ));
+            }
+        }
+        "speaches" => {
+            if config.asr.speaches.is_none() {
+                return Err(ConfigError::Invalid(
+                    "asr.primary is 'speaches' but [asr.speaches] section is missing".into(),
                 ));
             }
         }

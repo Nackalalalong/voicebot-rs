@@ -36,6 +36,7 @@ impl Language {
 pub enum AsrProviderType {
     Deepgram,
     Whisper,
+    Speaches,
 }
 
 impl fmt::Display for AsrProviderType {
@@ -43,6 +44,7 @@ impl fmt::Display for AsrProviderType {
         match self {
             AsrProviderType::Deepgram => write!(f, "deepgram"),
             AsrProviderType::Whisper => write!(f, "whisper"),
+            AsrProviderType::Speaches => write!(f, "speaches"),
         }
     }
 }
@@ -51,6 +53,7 @@ impl AsrProviderType {
     pub fn from_str_loose(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "whisper" => AsrProviderType::Whisper,
+            "speaches" => AsrProviderType::Speaches,
             _ => AsrProviderType::Deepgram,
         }
     }
@@ -62,6 +65,7 @@ impl AsrProviderType {
 pub enum TtsProviderType {
     ElevenLabs,
     Coqui,
+    Speaches,
 }
 
 impl fmt::Display for TtsProviderType {
@@ -69,6 +73,7 @@ impl fmt::Display for TtsProviderType {
         match self {
             TtsProviderType::ElevenLabs => write!(f, "elevenlabs"),
             TtsProviderType::Coqui => write!(f, "coqui"),
+            TtsProviderType::Speaches => write!(f, "speaches"),
         }
     }
 }
@@ -77,6 +82,7 @@ impl TtsProviderType {
     pub fn from_str_loose(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "coqui" => TtsProviderType::Coqui,
+            "speaches" => TtsProviderType::Speaches,
             _ => TtsProviderType::ElevenLabs,
         }
     }

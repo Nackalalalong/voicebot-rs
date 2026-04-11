@@ -46,6 +46,18 @@ voice_id = "pNInz6obpgDQGcFmaJgB"
 [tts.coqui]
 model_path = "./models/tts_model.pth"
 
+[asr.speaches]
+base_url = "http://localhost:8000"
+# api_key = "${SPEACHES_API_KEY}"
+model = "Systran/faster-whisper-large-v3"
+language = "th"
+
+[tts.speaches]
+base_url = "http://localhost:8000"
+# api_key = "${SPEACHES_API_KEY}"
+model = "kokoro"
+voice = "af_heart"
+
 [channels]
 audio_ingress_capacity = 50
 event_bus_capacity = 200
