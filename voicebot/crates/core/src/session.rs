@@ -1,13 +1,17 @@
+use std::sync::Arc;
+
 use common::audio::AudioFrame;
 use common::events::{PipelineEvent, SessionConfig};
 use common::testing::ReceiverAudioStream;
+use common::traits::{AsrProvider, LlmProvider, TtsProvider};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use agent::stub::StubLlmProvider;
 use asr::stub::StubAsrProvider;
-use common::traits::AsrProvider;
+use tts::stub::StubTtsProvider;
 use vad::component::VadComponent;
 
 use crate::error::SessionError;
@@ -29,10 +33,14 @@ pub struct PipelineSession {
 }
 
 impl PipelineSession {
+    /// Start a full pipeline session with the given providers.
     pub async fn start(
         config: SessionConfig,
         audio_rx: Receiver<AudioFrame>,
         egress_tx: Sender<PipelineEvent>,
+        asr: Arc<dyn AsrProvider>,
+        llm: Arc<dyn LlmProvider>,
+        tts: Arc<dyn TtsProvider>,
     ) -> Result<Self, SessionError> {
         let cancel_token = CancellationToken::new();
         let session_id = config.session_id;
@@ -42,30 +50,58 @@ impl PipelineSession {
 
         let mut handles = Vec::new();
 
-        // VAD component: reads audio_rx, emits SpeechStarted/SpeechEnded to event_tx
+        // Audio fanout — fork incoming audio to both VAD and ASR
+        let (vad_audio_tx, vad_audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(50);
+        let (asr_audio_tx, asr_audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(100);
+        let fanout_token = cancel_token.child_token();
+        handles.push(tokio::spawn(async move {
+            let mut rx = audio_rx;
+            loop {
+                tokio::select! {
+                    _ = fanout_token.cancelled() => break,
+                    frame = rx.recv() => {
+                        match frame {
+                            Some(f) => {
+                                // Clone is cheap — AudioFrame uses Arc<[i16]>
+                                let _ = vad_audio_tx.try_send(f.clone());
+                                let _ = asr_audio_tx.try_send(f);
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+        }));
+
+        // VAD component: reads audio, emits SpeechStarted/SpeechEnded to event_tx
         let vad_token = cancel_token.child_token();
         let vad_event_tx = event_tx.clone();
         let mut vad = VadComponent::new(config.vad_config.clone(), vad_event_tx, vad_token);
         handles.push(tokio::spawn(async move {
-            let audio_stream = ReceiverAudioStream::new(audio_rx);
+            let audio_stream = ReceiverAudioStream::new(vad_audio_rx);
             vad.run(Box::new(audio_stream)).await;
         }));
 
-        // Stub ASR: reads audio from a channel (not wired to real audio here),
-        // emits FinalTranscript to event_tx
+        // ASR: reads audio, emits FinalTranscript to event_tx
         let asr_event_tx = event_tx.clone();
-        let (_asr_audio_tx, asr_audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(100);
-        let asr_provider = StubAsrProvider;
         handles.push(tokio::spawn(async move {
             let audio_stream = ReceiverAudioStream::new(asr_audio_rx);
-            if let Err(e) = asr_provider.stream(Box::new(audio_stream), asr_event_tx).await {
+            if let Err(e) = asr.stream(Box::new(audio_stream), asr_event_tx).await {
                 warn!("ASR task error: {}", e);
             }
         }));
 
-        // Orchestrator: consumes event_rx, forwards relevant events to egress_tx
+        // Orchestrator: consumes events, triggers agent/TTS, forwards to egress
         let orch_token = cancel_token.child_token();
-        let mut orchestrator = Orchestrator::new(session_id, event_rx, egress_tx, orch_token);
+        let mut orchestrator = Orchestrator::with_providers(
+            session_id,
+            event_rx,
+            event_tx.clone(),
+            egress_tx,
+            orch_token,
+            llm,
+            tts,
+        );
         handles.push(tokio::spawn(async move {
             orchestrator.run().await;
         }));
@@ -78,6 +114,18 @@ impl PipelineSession {
             cancel_token,
             task_handles: handles,
         })
+    }
+
+    /// Start a session with stub providers (for testing and development).
+    pub async fn start_with_stubs(
+        config: SessionConfig,
+        audio_rx: Receiver<AudioFrame>,
+        egress_tx: Sender<PipelineEvent>,
+    ) -> Result<Self, SessionError> {
+        let asr: Arc<dyn AsrProvider> = Arc::new(StubAsrProvider);
+        let llm: Arc<dyn LlmProvider> = Arc::new(StubLlmProvider);
+        let tts: Arc<dyn TtsProvider> = Arc::new(StubTtsProvider);
+        Self::start(config, audio_rx, egress_tx, asr, llm, tts).await
     }
 
     pub async fn terminate(&mut self) {

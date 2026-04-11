@@ -60,7 +60,7 @@ async fn handle_connection(ws: WebSocket) {
     let (egress_tx, mut egress_rx) = tokio::sync::mpsc::channel::<PipelineEvent>(200);
 
     // Start pipeline session
-    let mut session = match PipelineSession::start(config, audio_rx, egress_tx).await {
+    let mut session = match PipelineSession::start_with_stubs(config, audio_rx, egress_tx).await {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(%session_id, "failed to start session: {}", e);

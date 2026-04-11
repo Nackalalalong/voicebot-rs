@@ -1,7 +1,12 @@
+use std::sync::Arc;
+
+use agent::core::AgentCore;
 use common::events::PipelineEvent;
+use common::traits::{LlmProvider, TtsProvider};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,11 +22,21 @@ pub struct Orchestrator {
     state: OrchestratorState,
     session_id: Uuid,
     event_rx: Receiver<PipelineEvent>,
+    event_tx: Option<Sender<PipelineEvent>>,
     egress_tx: Sender<PipelineEvent>,
     cancel_token: CancellationToken,
+
+    // Optional providers — when set, orchestrator triggers downstream components
+    llm: Option<Arc<dyn LlmProvider>>,
+    tts: Option<Arc<dyn TtsProvider>>,
+
+    // Active task handles for cancellation
+    agent_handle: Option<JoinHandle<()>>,
+    tts_handle: Option<JoinHandle<()>>,
 }
 
 impl Orchestrator {
+    /// Create an orchestrator without providers (state machine only, for unit tests).
     pub fn new(
         session_id: Uuid,
         event_rx: Receiver<PipelineEvent>,
@@ -32,8 +47,37 @@ impl Orchestrator {
             state: OrchestratorState::Idle,
             session_id,
             event_rx,
+            event_tx: None,
             egress_tx,
             cancel_token,
+            llm: None,
+            tts: None,
+            agent_handle: None,
+            tts_handle: None,
+        }
+    }
+
+    /// Create an orchestrator with providers for full pipeline triggering.
+    pub fn with_providers(
+        session_id: Uuid,
+        event_rx: Receiver<PipelineEvent>,
+        event_tx: Sender<PipelineEvent>,
+        egress_tx: Sender<PipelineEvent>,
+        cancel_token: CancellationToken,
+        llm: Arc<dyn LlmProvider>,
+        tts: Arc<dyn TtsProvider>,
+    ) -> Self {
+        Self {
+            state: OrchestratorState::Idle,
+            session_id,
+            event_rx,
+            event_tx: Some(event_tx),
+            egress_tx,
+            cancel_token,
+            llm: Some(llm),
+            tts: Some(tts),
+            agent_handle: None,
+            tts_handle: None,
         }
     }
 
@@ -77,9 +121,11 @@ impl Orchestrator {
                 let _ = self.egress_tx.send(event).await;
                 return;
             }
-            (OrchestratorState::Transcribing, PipelineEvent::FinalTranscript { .. }) => {
+            (OrchestratorState::Transcribing, PipelineEvent::FinalTranscript { ref text, .. }) => {
+                let transcript = text.clone();
                 self.state = OrchestratorState::AgentThinking;
                 let _ = self.egress_tx.send(event).await;
+                self.trigger_agent(transcript);
                 return;
             }
 
@@ -88,9 +134,14 @@ impl Orchestrator {
                 let _ = self.egress_tx.send(event).await;
                 return;
             }
-            (OrchestratorState::AgentThinking, PipelineEvent::AgentFinalResponse { .. }) => {
+            (
+                OrchestratorState::AgentThinking,
+                PipelineEvent::AgentFinalResponse { ref text, .. },
+            ) => {
+                let response_text = text.clone();
                 self.state = OrchestratorState::Speaking;
                 let _ = self.egress_tx.send(event).await;
+                self.trigger_tts(response_text);
                 return;
             }
 
@@ -108,6 +159,8 @@ impl Orchestrator {
             // Interrupt — only valid during Speaking
             (OrchestratorState::Speaking, PipelineEvent::Interrupt) => {
                 info!(session_id = %self.session_id, "interrupt during speaking, returning to Idle");
+                self.cancel_active_tasks();
+                crate::observability::record_interrupt();
                 self.state = OrchestratorState::Idle;
                 return;
             }
@@ -115,12 +168,28 @@ impl Orchestrator {
             // Cancel — valid from any state
             (_, PipelineEvent::Cancel) => {
                 info!(session_id = %self.session_id, state = ?self.state, "cancel received, returning to Idle");
+                self.cancel_active_tasks();
                 self.state = OrchestratorState::Idle;
                 return;
             }
 
             // Forward component errors from any state
-            (_, PipelineEvent::ComponentError { .. }) => {
+            (
+                _,
+                PipelineEvent::ComponentError {
+                    ref component,
+                    ref error,
+                    recoverable,
+                },
+            ) => {
+                crate::observability::record_error(&component.to_string(), *recoverable);
+                warn!(
+                    session_id = %self.session_id,
+                    %component,
+                    %error,
+                    recoverable,
+                    "component error"
+                );
                 let _ = self.egress_tx.send(event).await;
                 return;
             }
@@ -135,6 +204,53 @@ impl Orchestrator {
                 );
                 return;
             }
+        }
+    }
+
+    /// Spawn an agent task to handle the transcript (only if LLM provider is configured).
+    fn trigger_agent(&mut self, transcript: String) {
+        let (Some(llm), Some(event_tx)) = (self.llm.clone(), self.event_tx.clone()) else {
+            return;
+        };
+        let cancel_token = self.cancel_token.child_token();
+        let session_id = self.session_id;
+
+        self.agent_handle = Some(tokio::spawn(async move {
+            let mut agent = AgentCore::new(llm, vec![], None, cancel_token);
+            if let Err(e) = agent.handle_turn(transcript, event_tx).await {
+                warn!(session_id = %session_id, "agent error: {}", e);
+            }
+        }));
+    }
+
+    /// Spawn a TTS task to synthesize the response (only if TTS provider is configured).
+    fn trigger_tts(&mut self, text: String) {
+        let (Some(tts), Some(event_tx)) = (self.tts.clone(), self.event_tx.clone()) else {
+            return;
+        };
+        let session_id = self.session_id;
+        let (text_tx, text_rx) = tokio::sync::mpsc::channel::<String>(20);
+
+        self.tts_handle = Some(tokio::spawn(async move {
+            // Send text to TTS provider, then drop sender to signal end
+            if text_tx.send(text).await.is_err() {
+                warn!(session_id = %session_id, "TTS text channel closed");
+                return;
+            }
+            drop(text_tx);
+            if let Err(e) = tts.synthesize(text_rx, event_tx).await {
+                warn!(session_id = %session_id, "TTS error: {}", e);
+            }
+        }));
+    }
+
+    /// Cancel any active agent or TTS tasks.
+    fn cancel_active_tasks(&mut self) {
+        if let Some(handle) = self.agent_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.tts_handle.take() {
+            handle.abort();
         }
     }
 }
