@@ -1,7 +1,10 @@
 use common::audio::AudioFrame;
 use common::events::{PipelineEvent, SessionConfig, VadConfig};
 use common::types::{AsrProviderType, Language, LlmProviderType, TtsProviderType};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 /// Helper to create voiced audio frames (sine wave at 440Hz)
@@ -41,7 +44,7 @@ async fn test_pipeline_vad_detects_speech() {
     let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, mut egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    let mut session = voicebot_core::session::PipelineSession::start(config, audio_rx, egress_tx)
+    let mut session = voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
         .await
         .expect("session start failed");
 
@@ -91,7 +94,7 @@ async fn test_session_starts_and_terminates() {
     let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, _egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    let mut session = voicebot_core::session::PipelineSession::start(config, audio_rx, egress_tx)
+    let mut session = voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
         .await
         .expect("session start failed");
 
@@ -120,7 +123,7 @@ async fn test_session_terminate_is_idempotent() {
     let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, _egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    let mut session = voicebot_core::session::PipelineSession::start(config, audio_rx, egress_tx)
+    let mut session = voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
         .await
         .expect("session start failed");
 
@@ -149,4 +152,154 @@ async fn test_audio_channel_backpressure() {
         }
     }
     assert!(dropped > 0, "should have dropped some frames");
+}
+
+fn default_config() -> SessionConfig {
+    SessionConfig {
+        session_id: Uuid::new_v4(),
+        language: Language::English,
+        asr_provider: AsrProviderType::Deepgram,
+        tts_provider: TtsProviderType::ElevenLabs,
+        llm_provider: LlmProviderType::OpenAi,
+        vad_config: VadConfig::default(),
+    }
+}
+
+/// Full E2E pipeline test: Audio → VAD → ASR → Agent → TTS → Egress.
+///
+/// Sends speech followed by silence, then closes the audio stream.
+/// Verifies the full chain produces FinalTranscript, AgentFinalResponse,
+/// TtsAudioChunk, and TtsComplete on the egress channel.
+#[tokio::test]
+async fn test_full_pipeline_e2e_with_stubs() {
+    let config = default_config();
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
+    let (egress_tx, mut egress_rx) = mpsc::channel::<PipelineEvent>(200);
+
+    let mut session =
+        voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
+            .await
+            .expect("session start failed");
+
+    // Send 25 voiced frames (500ms speech) to trigger VAD SpeechStarted
+    for frame in make_speech_frames(25) {
+        audio_tx.send(frame).await.expect("send audio");
+    }
+
+    // Send 50 silence frames (1000ms) to trigger VAD SpeechEnded
+    for frame in make_silence_frames(50, 25) {
+        audio_tx.send(frame).await.expect("send silence");
+    }
+
+    // Close the audio stream — causes ASR to flush and emit FinalTranscript
+    drop(audio_tx);
+
+    // Collect egress events with a timeout
+    let mut got_final_transcript = false;
+    let mut got_agent_response = false;
+    let mut got_tts_audio = false;
+    let mut got_tts_complete = false;
+
+    let deadline = timeout(Duration::from_secs(10), async {
+        while let Some(event) = egress_rx.recv().await {
+            match event {
+                PipelineEvent::FinalTranscript { ref text, .. } => {
+                    assert_eq!(text, "stub transcript");
+                    got_final_transcript = true;
+                }
+                PipelineEvent::AgentFinalResponse { ref text, .. } => {
+                    assert_eq!(text, "stub response");
+                    got_agent_response = true;
+                }
+                PipelineEvent::TtsAudioChunk { .. } => {
+                    got_tts_audio = true;
+                }
+                PipelineEvent::TtsComplete => {
+                    got_tts_complete = true;
+                    break; // Full flow complete
+                }
+                _ => {}
+            }
+        }
+    })
+    .await;
+
+    assert!(deadline.is_ok(), "pipeline did not complete within 10s");
+    assert!(got_final_transcript, "missing FinalTranscript");
+    assert!(got_agent_response, "missing AgentFinalResponse");
+    assert!(got_tts_audio, "missing TtsAudioChunk");
+    assert!(got_tts_complete, "missing TtsComplete");
+
+    session.terminate().await;
+}
+
+/// Test that the pipeline works with explicit provider injection.
+#[tokio::test]
+async fn test_pipeline_with_explicit_providers() {
+    let config = default_config();
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
+    let (egress_tx, mut egress_rx) = mpsc::channel::<PipelineEvent>(200);
+
+    let asr: Arc<dyn common::traits::AsrProvider> = Arc::new(asr::stub::StubAsrProvider);
+    let llm: Arc<dyn common::traits::LlmProvider> = Arc::new(agent::stub::StubLlmProvider);
+    let tts: Arc<dyn common::traits::TtsProvider> = Arc::new(tts::stub::StubTtsProvider);
+
+    let mut session =
+        voicebot_core::session::PipelineSession::start(config, audio_rx, egress_tx, asr, llm, tts)
+            .await
+            .expect("session start failed");
+
+    // Send speech then silence then close
+    for frame in make_speech_frames(25) {
+        audio_tx.send(frame).await.expect("send audio");
+    }
+    for frame in make_silence_frames(50, 25) {
+        audio_tx.send(frame).await.expect("send silence");
+    }
+    drop(audio_tx);
+
+    // Wait for TtsComplete
+    let result = timeout(Duration::from_secs(10), async {
+        while let Some(event) = egress_rx.recv().await {
+            if matches!(event, PipelineEvent::TtsComplete) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+
+    assert!(result.is_ok(), "pipeline timed out");
+    assert!(result.unwrap(), "did not receive TtsComplete");
+
+    session.terminate().await;
+}
+
+/// Test that session terminate cancels in-flight pipeline tasks.
+#[tokio::test]
+async fn test_pipeline_terminate_cancels_active_tasks() {
+    let config = default_config();
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
+    let (egress_tx, _egress_rx) = mpsc::channel::<PipelineEvent>(200);
+
+    let mut session =
+        voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
+            .await
+            .expect("session start failed");
+
+    // Start sending audio (pipeline is working)
+    for frame in make_speech_frames(10) {
+        audio_tx.send(frame).await.expect("send audio");
+    }
+
+    // Terminate immediately without waiting for pipeline to complete
+    session.terminate().await;
+    assert_eq!(
+        session.state,
+        voicebot_core::session::SessionState::Terminated
+    );
+
+    // Audio channel should be closed now
+    let frame = AudioFrame::silence(20, 0);
+    assert!(audio_tx.send(frame).await.is_err());
 }
