@@ -10,6 +10,7 @@ All agent skills live in `skills/<name>/SKILL.md`. Read the relevant skill befor
 | `rust_async` | Tokio patterns, channels, cancellation, spawn_blocking |
 | `error_handling_and_fault_tolerance` | Error types, retry matrix, fallback providers |
 | `provider_integration` | Deepgram, OpenAI, ElevenLabs API integration |
+| `speaches` | Speaches server: ASR (faster-whisper), TTS (Kokoro/Piper), Realtime WS |
 | `testing_convention` | Test structure, TestAudioStream, mock providers, fixtures |
 | `orchestrator_and_pipeline_session` | State machine, session lifecycle, channel wiring, interrupts |
 | `websocket_transport` | WS server, binary/JSON framing, session spawning |
