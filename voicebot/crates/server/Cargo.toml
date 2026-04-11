@@ -1,0 +1,16 @@
+[package]
+name = "voicebot-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "voicebot"
+path = "src/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+voicebot-core = { path = "../core" }
+transport-websocket = { path = "../transport/websocket" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
