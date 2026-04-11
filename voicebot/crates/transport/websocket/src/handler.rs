@@ -1,11 +1,14 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use common::audio::AudioFrame;
+use common::config::AppConfig;
 use common::events::{PipelineEvent, SessionConfig, VadConfig};
 use common::types::{AsrProviderType, Language, LlmProviderType, TtsProviderType};
 use futures::{SinkExt, StreamExt};
+use std::sync::Arc;
 use uuid::Uuid;
 use voicebot_core::session::PipelineSession;
 
@@ -13,13 +16,29 @@ use crate::error::TransportError;
 use crate::protocol::{parse_client_message, ClientMessage, ServerMessage};
 
 /// Build the Axum router with the `/session` WebSocket endpoint.
+/// When called without config, uses stub providers.
 pub fn router() -> Router {
-    Router::new().route("/session", get(ws_handler))
+    Router::new().route("/session", get(ws_handler_stubs))
 }
 
-/// Axum handler that upgrades an HTTP request to a WebSocket connection.
-async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handle_connection)
+/// Build the Axum router with config-driven providers.
+pub fn router_with_config(config: Arc<AppConfig>) -> Router {
+    Router::new()
+        .route("/session", get(ws_handler_configured))
+        .with_state(config)
+}
+
+/// Axum handler using stub providers (for testing).
+async fn ws_handler_stubs(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_connection(socket, None))
+}
+
+/// Axum handler using real providers from config.
+async fn ws_handler_configured(
+    State(config): State<Arc<AppConfig>>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_connection(socket, Some(config)))
 }
 
 /// Main connection handler. Manages the full lifecycle of a single session:
@@ -28,7 +47,7 @@ async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
 /// 3. Spawn the core pipeline (VAD → ASR → Agent → TTS)
 /// 4. Bridge WebSocket frames ↔ pipeline events until disconnect
 /// 5. Terminate the pipeline on exit
-async fn handle_connection(ws: WebSocket) {
+async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
     // Transport layer owns the session UUID — core never generates it
     let session_id = Uuid::new_v4();
     tracing::info!(%session_id, "new WebSocket connection");
@@ -60,7 +79,11 @@ async fn handle_connection(ws: WebSocket) {
     let (egress_tx, mut egress_rx) = tokio::sync::mpsc::channel::<PipelineEvent>(200);
 
     // Start pipeline session
-    let mut session = match PipelineSession::start_with_stubs(config, audio_rx, egress_tx).await {
+    let session_result = match app_config {
+        Some(ref cfg) => PipelineSession::start_with_config(cfg, config, audio_rx, egress_tx).await,
+        None => PipelineSession::start_with_stubs(config, audio_rx, egress_tx).await,
+    };
+    let mut session = match session_result {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(%session_id, "failed to start session: {}", e);

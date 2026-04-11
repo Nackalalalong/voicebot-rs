@@ -29,10 +29,12 @@ async fn main() {
         }
     }
 
-    // Build the WebSocket router
-    let app = transport_websocket::handler::router();
-
+    // Extract listen address before moving config into Arc
     let listen_addr = format!("{}:{}", config.server.host, config.server.port);
+
+    // Build the WebSocket router with real providers from config
+    let app = transport_websocket::handler::router_with_config(std::sync::Arc::new(config));
+
     let listener = match tokio::net::TcpListener::bind(&listen_addr).await {
         Ok(l) => l,
         Err(e) => {

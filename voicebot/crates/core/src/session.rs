@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use common::audio::AudioFrame;
+use common::config::AppConfig;
 use common::events::{PipelineEvent, SessionConfig};
 use common::testing::ReceiverAudioStream;
 use common::traits::{AsrProvider, LlmProvider, TtsProvider};
@@ -16,6 +17,106 @@ use vad::component::VadComponent;
 
 use crate::error::SessionError;
 use crate::orchestrator::Orchestrator;
+
+/// Build providers from AppConfig + SessionConfig.
+pub fn build_providers(
+    app_config: &AppConfig,
+    session_config: &SessionConfig,
+) -> Result<
+    (
+        Arc<dyn AsrProvider>,
+        Arc<dyn LlmProvider>,
+        Arc<dyn TtsProvider>,
+    ),
+    SessionError,
+> {
+    use common::types::{AsrProviderType, TtsProviderType};
+
+    // --- ASR ---
+    let asr: Arc<dyn AsrProvider> = match session_config.asr_provider {
+        AsrProviderType::Speaches => {
+            let cfg =
+                app_config.asr.speaches.as_ref().ok_or_else(|| {
+                    SessionError::Internal("[asr.speaches] config missing".into())
+                })?;
+            let mut provider =
+                asr::speaches::SpeachesAsrProvider::new(cfg.base_url.clone(), cfg.model.clone());
+            if let Some(key) = &cfg.api_key {
+                provider = provider.with_api_key(key.clone());
+            }
+            if let Some(lang) = &cfg.language {
+                provider = provider.with_language(lang.clone());
+            }
+            Arc::new(provider)
+        }
+        AsrProviderType::Deepgram => {
+            let cfg =
+                app_config.asr.deepgram.as_ref().ok_or_else(|| {
+                    SessionError::Internal("[asr.deepgram] config missing".into())
+                })?;
+            let provider =
+                asr::deepgram::DeepgramProvider::new(cfg.api_key.clone(), cfg.language.clone())
+                    .with_model(cfg.model.clone());
+            Arc::new(provider)
+        }
+        AsrProviderType::Whisper => {
+            // Whisper local not yet implemented — use stub
+            Arc::new(StubAsrProvider)
+        }
+    };
+
+    // --- LLM ---
+    let llm: Arc<dyn LlmProvider> = match session_config.llm_provider {
+        common::types::LlmProviderType::OpenAi => {
+            let cfg = app_config
+                .llm
+                .openai
+                .as_ref()
+                .ok_or_else(|| SessionError::Internal("[llm.openai] config missing".into()))?;
+            let provider =
+                agent::openai::OpenAiProvider::new(cfg.api_key.clone(), cfg.model.clone());
+            Arc::new(provider)
+        }
+        common::types::LlmProviderType::Anthropic => {
+            // Anthropic not yet implemented — use stub
+            Arc::new(StubLlmProvider)
+        }
+    };
+
+    // --- TTS ---
+    let tts: Arc<dyn TtsProvider> = match session_config.tts_provider {
+        TtsProviderType::Speaches => {
+            let cfg =
+                app_config.tts.speaches.as_ref().ok_or_else(|| {
+                    SessionError::Internal("[tts.speaches] config missing".into())
+                })?;
+            let mut provider = tts::speaches::SpeachesTtsProvider::new(
+                cfg.base_url.clone(),
+                cfg.model.clone(),
+                cfg.voice.clone(),
+            );
+            if let Some(key) = &cfg.api_key {
+                provider = provider.with_api_key(key.clone());
+            }
+            Arc::new(provider)
+        }
+        TtsProviderType::ElevenLabs => {
+            let cfg =
+                app_config.tts.elevenlabs.as_ref().ok_or_else(|| {
+                    SessionError::Internal("[tts.elevenlabs] config missing".into())
+                })?;
+            let provider =
+                tts::elevenlabs::ElevenLabsProvider::new(cfg.api_key.clone(), cfg.voice_id.clone());
+            Arc::new(provider)
+        }
+        TtsProviderType::Coqui => {
+            // Coqui not yet implemented — use stub
+            Arc::new(StubTtsProvider)
+        }
+    };
+
+    Ok((asr, llm, tts))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionState {
@@ -126,6 +227,17 @@ impl PipelineSession {
         let llm: Arc<dyn LlmProvider> = Arc::new(StubLlmProvider);
         let tts: Arc<dyn TtsProvider> = Arc::new(StubTtsProvider);
         Self::start(config, audio_rx, egress_tx, asr, llm, tts).await
+    }
+
+    /// Start a session using providers derived from AppConfig.
+    pub async fn start_with_config(
+        app_config: &AppConfig,
+        session_config: SessionConfig,
+        audio_rx: Receiver<AudioFrame>,
+        egress_tx: Sender<PipelineEvent>,
+    ) -> Result<Self, SessionError> {
+        let (asr, llm, tts) = build_providers(app_config, &session_config)?;
+        Self::start(session_config, audio_rx, egress_tx, asr, llm, tts).await
     }
 
     pub async fn terminate(&mut self) {
