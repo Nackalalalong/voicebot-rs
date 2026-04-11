@@ -67,10 +67,16 @@ pub struct LlmConfigGroup {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiConfig {
+    #[serde(default = "default_openai_base_url")]
+    pub base_url: String,
     pub api_key: String,
     pub model: String,
     pub max_tokens: u32,
     pub temperature: f32,
+}
+
+fn default_openai_base_url() -> String {
+    "https://api.openai.com".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]

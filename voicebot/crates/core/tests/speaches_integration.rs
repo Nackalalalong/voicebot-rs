@@ -46,6 +46,7 @@ fn test_app_config() -> AppConfig {
             primary: "openai".into(),
             fallback: None,
             openai: Some(OpenAiConfig {
+                base_url: "https://api.openai.com".into(),
                 api_key: "stub-key".into(),
                 model: "gpt-4".into(),
                 max_tokens: 200,
@@ -74,8 +75,7 @@ fn make_speech_frames(count: usize) -> Vec<AudioFrame> {
             let samples: Vec<i16> = (0..320)
                 .map(|s| {
                     let t = (i * 320 + s) as f32 / 16000.0;
-                    (0.5 * (2.0 * std::f32::consts::PI * 440.0 * t).sin() * i16::MAX as f32)
-                        as i16
+                    (0.5 * (2.0 * std::f32::consts::PI * 440.0 * t).sin() * i16::MAX as f32) as i16
                 })
                 .collect();
             AudioFrame::new(samples, i as u64 * 20)
@@ -165,9 +165,8 @@ async fn test_build_providers_speaches() {
         vad_config: VadConfig::default(),
     };
 
-    let (asr, _llm, _tts) =
-        voicebot_core::session::build_providers(&app_config, &session_config)
-            .expect("build_providers should succeed");
+    let (asr, _llm, _tts) = voicebot_core::session::build_providers(&app_config, &session_config)
+        .expect("build_providers should succeed");
 
     // Verify providers were created (basic type check via trait objects)
     // We can't downcast easily, but if we get here without error, it worked
@@ -182,9 +181,7 @@ async fn test_build_providers_speaches() {
         .await
         .expect("ASR stream should succeed");
 
-    while let Ok(Some(event)) =
-        tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
-    {
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
         if let PipelineEvent::FinalTranscript { text, .. } = event {
             println!("ASR result: {text:?}");
         }

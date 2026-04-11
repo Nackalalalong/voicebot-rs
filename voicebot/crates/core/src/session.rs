@@ -73,8 +73,11 @@ pub fn build_providers(
                 .openai
                 .as_ref()
                 .ok_or_else(|| SessionError::Internal("[llm.openai] config missing".into()))?;
-            let provider =
-                agent::openai::OpenAiProvider::new(cfg.api_key.clone(), cfg.model.clone());
+            let provider = agent::openai::OpenAiProvider::new(
+                cfg.base_url.clone(),
+                cfg.api_key.clone(),
+                cfg.model.clone(),
+            );
             Arc::new(provider)
         }
         common::types::LlmProviderType::Anthropic => {

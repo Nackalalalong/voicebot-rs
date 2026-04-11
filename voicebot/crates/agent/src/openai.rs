@@ -11,6 +11,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
 
 pub struct OpenAiProvider {
+    base_url: String,
     api_key: String,
     model: String,
     client: reqwest::Client,
@@ -18,13 +19,14 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(base_url: String, api_key: String, model: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("failed to build reqwest client"); // OK: constructor, not async path
         Self {
+            base_url,
             api_key,
             model,
             client,
@@ -99,7 +101,7 @@ impl LlmProvider for OpenAiProvider {
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -166,7 +168,11 @@ impl LlmProvider for OpenAiProvider {
 
                             // Grow the accumulator if needed
                             while accumulated_tool_calls.len() <= index {
-                                accumulated_tool_calls.push((String::new(), String::new(), String::new()));
+                                accumulated_tool_calls.push((
+                                    String::new(),
+                                    String::new(),
+                                    String::new(),
+                                ));
                             }
 
                             if let Some(ref id) = tc.id {
@@ -191,8 +197,8 @@ impl LlmProvider for OpenAiProvider {
             .into_iter()
             .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
             .map(|(id, name, args_json)| {
-                let arguments: serde_json::Value =
-                    serde_json::from_str(&args_json).unwrap_or(serde_json::Value::Object(Default::default()));
+                let arguments: serde_json::Value = serde_json::from_str(&args_json)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
                 ToolCall {
                     id,
                     function: FunctionCall { name, arguments },
@@ -236,7 +242,11 @@ mod tests {
 
     #[test]
     fn test_provider_cancel() {
-        let provider = OpenAiProvider::new("test-key".into(), "gpt-4".into());
+        let provider = OpenAiProvider::new(
+            "https://api.openai.com".into(),
+            "test-key".into(),
+            "gpt-4".into(),
+        );
         assert!(!provider.cancelled.load(Ordering::Relaxed));
 
         let rt = tokio::runtime::Runtime::new().unwrap();
