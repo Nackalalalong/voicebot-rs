@@ -1,0 +1,11 @@
+[package]
+name = "transport-asterisk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../../common" }
+voicebot-core = { path = "../../core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

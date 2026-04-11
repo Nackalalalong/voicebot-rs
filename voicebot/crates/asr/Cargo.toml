@@ -1,0 +1,15 @@
+[package]
+name = "asr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }

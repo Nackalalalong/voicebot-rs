@@ -1,0 +1,51 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[session_defaults]
+language = "auto"
+asr_provider = "deepgram"
+tts_provider = "elevenlabs"
+llm_provider = "openai"
+
+[vad]
+silence_ms = 800
+min_speech_ms = 200
+energy_threshold = 0.02
+
+[asr]
+primary = "deepgram"
+fallback = "whisper"
+
+[asr.deepgram]
+api_key = "${DEEPGRAM_API_KEY}"
+model = "nova-2"
+language = "th"
+
+[asr.whisper]
+model_path = "./models/ggml-base.bin"
+
+[llm]
+primary = "openai"
+fallback = "anthropic"
+
+[llm.openai]
+api_key = "${OPENAI_API_KEY}"
+model = "gpt-4o"
+max_tokens = 512
+temperature = 0.7
+
+[llm.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+model = "claude-opus-4-6"
+
+[tts.elevenlabs]
+api_key = "${ELEVENLABS_API_KEY}"
+voice_id = "pNInz6obpgDQGcFmaJgB"
+
+[tts.coqui]
+model_path = "./models/tts_model.pth"
+
+[channels]
+audio_ingress_capacity = 50
+event_bus_capacity = 200

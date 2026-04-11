@@ -1,0 +1,17 @@
+[package]
+name = "transport-websocket"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../../common" }
+voicebot-core = { path = "../../core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+futures = { workspace = true }
+tokio-util = { workspace = true }
