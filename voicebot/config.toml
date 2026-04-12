@@ -53,3 +53,13 @@ voice = "af_heart"
 [channels]
 audio_ingress_capacity = 50
 event_bus_capacity = 200
+
+# Uncomment to enable Asterisk ARI transport.
+# audio_host must be reachable FROM Asterisk (not 127.0.0.1 if Asterisk is in Docker).
+# [asterisk]
+# ari_host = "localhost"
+# ari_port = 8088
+# username = "voicebot"
+# password = "secret"
+# app_name = "voicebot"
+# audio_host = "192.168.1.10"   # host IP reachable from Asterisk

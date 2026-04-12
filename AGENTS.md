@@ -15,6 +15,7 @@ All agent skills live in `skills/<name>/SKILL.md`. Read the relevant skill befor
 | `orchestrator_and_pipeline_session` | State machine, session lifecycle, channel wiring, interrupts |
 | `websocket_transport` | WS server, binary/JSON framing, session spawning |
 | `agent_tool_calling` | Tool loop (max 5 iters), conversation memory, sentence-boundary TTS |
+| `asterisk_ari` | Asterisk ARI Stasis app: WS events, AudioSocket protocol, REST channel control, DTMF |
 | `configuration` | config.toml parsing, env var substitution, fail-fast validation |
 | `observability` | tracing spans (always include session_id), Prometheus metrics |
 

@@ -32,8 +32,27 @@ async fn main() {
     // Extract listen address before moving config into Arc
     let listen_addr = format!("{}:{}", config.server.host, config.server.port);
 
+    // Start ARI transport if configured.
+    let asterisk_config = config.asterisk.clone();
+    let config_arc = std::sync::Arc::new(config);
+
+    if let Some(ari_cfg) = asterisk_config {
+        let app_config = std::sync::Arc::clone(&config_arc);
+        tokio::spawn(async move {
+            tracing::info!(
+                ari_host = %ari_cfg.ari_host,
+                ari_port = ari_cfg.ari_port,
+                "starting ARI transport"
+            );
+            let transport = transport_asterisk::AriTransport::new(ari_cfg, app_config);
+            if let Err(e) = transport.run().await {
+                tracing::error!("ARI transport error: {}", e);
+            }
+        });
+    }
+
     // Build the WebSocket router with real providers from config
-    let app = transport_websocket::handler::router_with_config(std::sync::Arc::new(config));
+    let app = transport_websocket::handler::router_with_config(config_arc);
 
     let listener = match tokio::net::TcpListener::bind(&listen_addr).await {
         Ok(l) => l,
@@ -47,9 +66,8 @@ async fn main() {
 
     // Graceful shutdown on SIGTERM / SIGINT
     let shutdown = async {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
         let sigint = tokio::signal::ctrl_c();
 
         tokio::select! {

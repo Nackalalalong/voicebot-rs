@@ -16,7 +16,7 @@
 | 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 7 | `OpenAiProvider` SSE streaming with configurable `base_url` (works with any OpenAI-compatible server), `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, `Tool` trait. **Missing:** integration test, concrete tool impls |
 | 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM from `/v1/audio/speech`, cancel support, sentence-boundary streaming wired in orchestrator. 4 ignored Speaches integration tests |
 | 8 | **Integration** — end-to-end with interrupt | ✅ Done | 7 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test |
-| 9 | **transport/asterisk** — ARI adapter | ❌ Not started | 0 | `lib.rs` is empty. Needs μ-law/A-law codec, RTP jitter buffer, DTMF mapping |
+| 9 | **transport/asterisk** — ARI adapter | 🟡 In Progress | 0 | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate. |
 | 10 | **Observability** — metrics, config validation, fallbacks | 🟡 Partial | 0 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown. **Missing:** fallback provider wiring, session metrics in session.rs |
 
 ---
@@ -28,7 +28,7 @@
 | **Speaches server** | ✅ Running | `system/speaches/compose.cpu.yaml`, CPU mode, HF cache bind-mounted to host |
 | **Speaches skill** | ✅ Done | `skills/speaches/SKILL.md` — integration patterns for ASR, TTS, VAD, Realtime WS |
 | **API reference** | ✅ Done | `docs/speaches/api-reference.md` — full endpoint reference from source |
-| **Audio fixtures** | ✅ Done | `tests/fixtures/audio/` — `sine_440hz_1s.wav`, `silence_1s.wav` (16kHz mono i16) |
+| **Asterisk ARI skill** | ✅ Done | `skills/asterisk_ari/SKILL.md` — ARI Stasis lifecycle, AudioSocket wire protocol, REST channel control, event deserialization, DTMF handling |
 | **Web demo** | ✅ Done | `system/voicebot-core-demo/` — browser mic → WS → chat UI + TTS playback; `start.sh` boots Speaches + voicebot server + static server in one command |
 
 ---
@@ -93,10 +93,16 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 
 ### Priority 4 — Asterisk transport (M9)
 
-- [ ] **ARI WebSocket adapter** — connect to Asterisk ARI
-- [ ] **Codec conversion** — μ-law/A-law ↔ PCM i16
-- [ ] **RTP jitter buffer** — 50ms buffer for out-of-order packets
-- [ ] **DTMF mapping** — DTMF digits → `PipelineEvent::Cancel`
+- [x] **ARI skill written** — `skills/asterisk_ari/SKILL.md` with full protocol reference
+- [x] **AsterisConfig in AppConfig** — `[asterisk]` section parsed from config.toml
+- [x] **ARI WebSocket adapter** — connect to Asterisk ARI WS event stream, dispatch StasisStart/End/DTMF
+- [x] **AudioSocket TCP server** — per-call ephemeral port, packet encode/decode (0x00/0x01/0x10)
+- [x] **slin16 passthrough** — AudioSocket `format=slin16` means no codec conversion needed
+- [x] **ARI REST client** — answer, externalMedia, bridge, hangup via reqwest
+- [x] **DTMF → cancel** — `#` or `*` cancels session via CancellationToken
+- [x] **Bridge cleanup** — destroy bridge and hang up on session end or error
+- [ ] **Integration test** — `#[ignore]` test with real Asterisk
+- [ ] **Docker Compose** — `system/asterisk/compose.yaml` for local testing
 
 ### Priority 5 — Observability + hardening (M10)
 

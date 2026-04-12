@@ -11,6 +11,7 @@ path = "src/main.rs"
 common = { path = "../common" }
 voicebot-core = { path = "../core" }
 transport-websocket = { path = "../transport/websocket" }
+transport-asterisk = { path = "../transport/asterisk" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
