@@ -22,8 +22,8 @@ Unit tests in the same file. Integration tests in `tests/` and gated:
 ```rust
 // Integration tests that need real network — skip in CI without creds
 #[tokio::test]
-#[ignore = "requires DEEPGRAM_API_KEY"]
-async fn test_deepgram_real_audio() { ... }
+#[ignore = "requires running Speaches server"]
+async fn test_speaches_real_audio() { ... }
 ```
 
 ## Required test utilities (implement in `common::testing`)
@@ -215,7 +215,7 @@ cargo test --workspace --exclude '*integration*'
 cargo test -p voicebot-vad
 
 # With real credentials (integration)
-DEEPGRAM_API_KEY=sk-... cargo test -p voicebot-asr -- --include-ignored
+SPEACHES_BASE_URL=http://localhost:8000 cargo test -p asr -- --include-ignored
 
 # With logging
 RUST_LOG=debug cargo test -p voicebot-core -- --nocapture

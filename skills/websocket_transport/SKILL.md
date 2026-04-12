@@ -83,7 +83,7 @@ fn parse_audio_frame(bytes: &[u8], timestamp_ms: u64) -> Result<AudioFrame, Tran
 ## Text frame JSON protocol (Client → Server)
 
 ```json
-{ "type": "session_start", "language": "th", "asr": "deepgram", "tts": "elevenlabs" }
+{ "type": "session_start", "language": "th", "asr": "speaches", "tts": "speaches" }
 { "type": "session_end" }
 ```
 

@@ -256,7 +256,7 @@ impl VadComponent {
 
 Must support:
 
-- Deepgram (primary) via WebSocket streaming API
+- Speaches / OpenAI-compatible server via `POST /v1/audio/transcriptions`
 - Whisper via `whisper-rs` (local fallback)
 
 On `SpeechEnded`: flush remaining buffer and emit `FinalTranscript`. On provider error: retry up to 3 times with 200ms backoff; on failure emit `ComponentError { recoverable: false }`.
@@ -291,7 +291,7 @@ Conversation memory: keep last N turns where N is configurable (default 20). Tri
 
 Must support:
 
-- ElevenLabs (streaming WebSocket API)
+- Speaches / OpenAI-compatible server via `POST /v1/audio/speech`
 - Coqui TTS (local fallback)
 
 **Streaming:** begin synthesis as soon as a sentence boundary is detected in partial agent output (`.`, `?`, `!`, or ~80 characters). Do not wait for `AgentFinalResponse`.
@@ -312,7 +312,7 @@ Emit `TtsComplete` after the final audio chunk.
 
 ```json
 // Control message (text frame)
-{ "type": "session_start", "language": "th", "asr": "deepgram", "tts": "elevenlabs" }
+{ "type": "session_start", "language": "th", "asr": "speaches", "tts": "speaches" }
 { "type": "session_end" }
 ```
 
@@ -362,8 +362,8 @@ port = 8080
 
 [session_defaults]
 language = "auto"
-asr_provider = "deepgram"
-tts_provider = "elevenlabs"
+asr_provider = "speaches"
+tts_provider = "speaches"
 llm_provider = "openai"
 
 [vad]
@@ -371,9 +371,9 @@ silence_ms = 800
 min_speech_ms = 200
 energy_threshold = 0.02
 
-[asr.deepgram]
-api_key = "${DEEPGRAM_API_KEY}"   # env var substitution required
-model = "nova-2"
+[asr.speaches]
+base_url = "http://localhost:8000"
+model = "Systran/faster-whisper-large-v3"
 language = "th"
 
 [asr.whisper]
@@ -389,9 +389,10 @@ temperature = 0.7
 api_key = "${ANTHROPIC_API_KEY}"
 model = "claude-opus-4-6"
 
-[tts.elevenlabs]
-api_key = "${ELEVENLABS_API_KEY}"
-voice_id = "..."
+[tts.speaches]
+base_url = "http://localhost:8000"
+model = "kokoro"
+voice = "af_heart"
 
 [tts.coqui]
 model_path = "./models/tts_model.pth"
@@ -455,7 +456,7 @@ primary = "openai"
 fallback = "anthropic"
 
 [asr]
-primary = "deepgram"
+primary = "speaches"
 fallback = "whisper"
 ```
 
@@ -481,11 +482,11 @@ Build in this exact sequence. Do not parallelize across crates until the depende
 
 **Milestone 4:** `voicebot/crates/transport/websocket` — WebSocket server, session spawning, binary frame parsing. Test with a real WebSocket client sending PCM audio.
 
-**Milestone 5:** `voicebot/crates/asr` — Deepgram provider. Integration test with real audio file.
+**Milestone 5:** `voicebot/crates/asr` — Speaches/OpenAI-compatible ASR provider. Integration test with real audio file.
 
 **Milestone 6:** `voicebot/crates/agent` — LLM provider (OpenAI first), tool calling loop.
 
-**Milestone 7:** `voicebot/crates/tts` — ElevenLabs provider. Sentence-boundary streaming.
+**Milestone 7:** `voicebot/crates/tts` — Speaches/OpenAI-compatible TTS provider. Sentence-boundary streaming.
 
 **Milestone 9:** `voicebot/crates/transport/asterisk` — ARI adapter. Codec conversion.
 

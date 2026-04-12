@@ -9,7 +9,7 @@ All agent skills live in `skills/<name>/SKILL.md`. Read the relevant skill befor
 | `audio_dsp` | Audio formats, codec conversion, VAD frame sizing, jitter buffer |
 | `rust_async` | Tokio patterns, channels, cancellation, spawn_blocking |
 | `error_handling_and_fault_tolerance` | Error types, retry matrix, fallback providers |
-| `provider_integration` | Deepgram, OpenAI, ElevenLabs API integration |
+| `provider_integration` | OpenAI-compatible API integration (Speaches, vLLM, etc.) |
 | `speaches` | Speaches server: ASR (faster-whisper), TTS (Kokoro/Piper), Realtime WS |
 | `testing_convention` | Test structure, TestAudioStream, mock providers, fixtures |
 | `orchestrator_and_pipeline_session` | State machine, session lifecycle, channel wiring, interrupts |

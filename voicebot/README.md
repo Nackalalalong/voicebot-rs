@@ -74,9 +74,9 @@ Any ──Cancel──► Idle
 | 2   | vad                 | VAD unit tests with synthetic frames   |
 | 3   | core (with stubs)   | Full pipeline runs end-to-end w/ stubs |
 | 4   | transport/websocket | WS client can send PCM, get events     |
-| 5   | asr                 | Deepgram integration test passes       |
+| 5   | asr                 | ASR integration test passes            |
 | 6   | agent               | OpenAI tool-call loop test passes      |
-| 7   | tts                 | ElevenLabs streams audio chunks        |
+| 7   | tts                 | Speaches streams audio chunks          |
 | 8   | Integration         | Real end-to-end call with interrupt    |
 | 9   | transport/asterisk  | ARI adapter passes codec test          |
 | 10  | Observability       | All metrics emit, config validates     |

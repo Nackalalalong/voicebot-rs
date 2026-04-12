@@ -40,7 +40,8 @@ mod tests {
 
     #[test]
     fn test_parse_session_start() {
-        let json = r#"{"type": "session_start", "language": "th", "asr": "deepgram", "tts": "elevenlabs"}"#;
+        let json =
+            r#"{"type": "session_start", "language": "th", "asr": "speaches", "tts": "speaches"}"#;
         let msg = parse_client_message(json).unwrap();
         assert!(matches!(msg, ClientMessage::SessionStart { .. }));
     }

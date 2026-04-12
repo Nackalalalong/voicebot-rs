@@ -15,12 +15,7 @@ energy_threshold = 0.02
 
 [asr]
 primary = "speaches"
-fallback = "deepgram"
-
-[asr.deepgram]
-api_key = "${DEEPGRAM_API_KEY}"
-model = "nova-2"
-language = "th"
+# fallback = "whisper"
 
 [asr.whisper]
 model_path = "./models/ggml-base.bin"
@@ -39,10 +34,6 @@ temperature = 0.7
 [llm.anthropic]
 api_key = "${ANTHROPIC_API_KEY}"
 model = "claude-opus-4-6"
-
-[tts.elevenlabs]
-api_key = "${ELEVENLABS_API_KEY}"
-voice_id = "pNInz6obpgDQGcFmaJgB"
 
 [tts.coqui]
 model_path = "./models/tts_model.pth"

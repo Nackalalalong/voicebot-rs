@@ -35,8 +35,8 @@ async fn test_pipeline_vad_detects_speech() {
     let config = SessionConfig {
         session_id,
         language: Language::English,
-        asr_provider: AsrProviderType::Deepgram,
-        tts_provider: TtsProviderType::ElevenLabs,
+        asr_provider: AsrProviderType::Speaches,
+        tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
     };
@@ -44,9 +44,10 @@ async fn test_pipeline_vad_detects_speech() {
     let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, mut egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    let mut session = voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
-        .await
-        .expect("session start failed");
+    let mut session =
+        voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
+            .await
+            .expect("session start failed");
 
     // Send 25 voiced frames (500ms) — enough to trigger speech detection
     for frame in make_speech_frames(25) {
@@ -54,11 +55,7 @@ async fn test_pipeline_vad_detects_speech() {
     }
 
     // Wait for SpeechStarted event from orchestrator
-    let event = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        egress_rx.recv(),
-    )
-    .await;
+    let event = tokio::time::timeout(std::time::Duration::from_secs(3), egress_rx.recv()).await;
 
     // The orchestrator may or may not forward SpeechStarted to egress.
     // Let's just verify the session is running without panic.
@@ -85,8 +82,8 @@ async fn test_session_starts_and_terminates() {
     let config = SessionConfig {
         session_id,
         language: Language::Thai,
-        asr_provider: AsrProviderType::Deepgram,
-        tts_provider: TtsProviderType::ElevenLabs,
+        asr_provider: AsrProviderType::Speaches,
+        tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
     };
@@ -94,9 +91,10 @@ async fn test_session_starts_and_terminates() {
     let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, _egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    let mut session = voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
-        .await
-        .expect("session start failed");
+    let mut session =
+        voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
+            .await
+            .expect("session start failed");
 
     assert_eq!(session.id, session_id);
 
@@ -114,8 +112,8 @@ async fn test_session_terminate_is_idempotent() {
     let config = SessionConfig {
         session_id,
         language: Language::English,
-        asr_provider: AsrProviderType::Deepgram,
-        tts_provider: TtsProviderType::ElevenLabs,
+        asr_provider: AsrProviderType::Speaches,
+        tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
     };
@@ -123,9 +121,10 @@ async fn test_session_terminate_is_idempotent() {
     let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, _egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    let mut session = voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
-        .await
-        .expect("session start failed");
+    let mut session =
+        voicebot_core::session::PipelineSession::start_with_stubs(config, audio_rx, egress_tx)
+            .await
+            .expect("session start failed");
 
     session.terminate().await;
     session.terminate().await; // Should not panic
@@ -158,8 +157,8 @@ fn default_config() -> SessionConfig {
     SessionConfig {
         session_id: Uuid::new_v4(),
         language: Language::English,
-        asr_provider: AsrProviderType::Deepgram,
-        tts_provider: TtsProviderType::ElevenLabs,
+        asr_provider: AsrProviderType::Speaches,
+        tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
     }

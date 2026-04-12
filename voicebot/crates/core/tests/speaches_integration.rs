@@ -33,7 +33,6 @@ fn test_app_config() -> AppConfig {
         asr: AsrConfigGroup {
             primary: "speaches".into(),
             fallback: None,
-            deepgram: None,
             whisper: None,
             speaches: Some(SpeachesAsrConfig {
                 base_url: base_url.clone(),
@@ -55,7 +54,6 @@ fn test_app_config() -> AppConfig {
             anthropic: None,
         },
         tts: TtsConfigGroup {
-            elevenlabs: None,
             coqui: None,
             speaches: Some(SpeachesTtsConfig {
                 base_url,

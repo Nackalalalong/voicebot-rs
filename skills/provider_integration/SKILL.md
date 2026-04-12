@@ -4,7 +4,7 @@ name: Provider Integration
 
 # Skill: Provider Integration
 
-Use this whenever integrating with Deepgram, OpenAI, Anthropic, ElevenLabs, or any external streaming API.
+Use this whenever integrating with OpenAI-compatible APIs (Speaches, vLLM, Ollama, LiteLLM) or any external streaming API.
 
 ## General rules
 
@@ -16,13 +16,12 @@ Use this whenever integrating with Deepgram, OpenAI, Anthropic, ElevenLabs, or a
 
 ## Timeouts (do not adjust without updating this file)
 
-| Provider   | Connection timeout | Response timeout | Stream idle timeout |
-| ---------- | ------------------ | ---------------- | ------------------- |
-| Deepgram   | 5s                 | —                | 10s                 |
-| OpenAI     | 5s                 | 60s              | 30s                 |
-| Anthropic  | 5s                 | 60s              | 30s                 |
-| ElevenLabs | 5s                 | —                | 10s                 |
-| Whisper    | —                  | 30s              | —                   |
+| Provider  | Connection timeout | Response timeout | Stream idle timeout |
+| --------- | ------------------ | ---------------- | ------------------- |
+| Speaches  | 5s                 | 60s              | 30s                 |
+| OpenAI    | 5s                 | 60s              | 30s                 |
+| Anthropic | 5s                 | 60s              | 30s                 |
+| Whisper   | —                  | 30s              | —                   |
 
 ## Retry logic (shared helper)
 
@@ -54,81 +53,66 @@ where
 }
 ```
 
-## Deepgram streaming ASR
+## OpenAI-compatible ASR (Speaches)
+
+Uses the standard OpenAI `/v1/audio/transcriptions` endpoint. Works with Speaches, OpenAI, or any compatible server.
 
 ```rust
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::Message;
-
-pub struct DeepgramProvider {
-    api_key: String,
+pub struct SpeachesAsrProvider {
+    base_url: String,
     model: String,
-    language: String,
+    api_key: Option<String>,
+    language: Option<String>,
+    client: reqwest::Client,
 }
 
-impl AsrProvider for DeepgramProvider {
-    async fn stream(
+impl AsrProvider for SpeachesAsrProvider {
+    async fn transcribe(
         &self,
-        mut audio_rx: impl AudioInputStream,
+        audio_data: Vec<u8>,
         tx: Sender<PipelineEvent>,
     ) -> Result<(), AsrError> {
-        let url = format!(
-            "wss://api.deepgram.com/v1/listen?model={}&language={}&encoding=linear16&sample_rate=16000&channels=1&interim_results=true",
-            self.model, self.language
-        );
+        let url = format!("{}/v1/audio/transcriptions", self.base_url);
 
-        let request = tokio_tungstenite::tungstenite::http::Request::builder()
-            .uri(&url)
-            .header("Authorization", format!("Token {}", self.api_key))
-            .body(())
-            .map_err(|_| AsrError::ConnectionFailed)?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", self.model.clone())
+            .text("response_format", "json")
+            .part("file", reqwest::multipart::Part::bytes(audio_data)
+                .file_name("audio.wav")
+                .mime_str("audio/wav")?);
 
-        let (mut ws, _) = timeout(Duration::from_secs(5), connect_async(request))
-            .await
-            .map_err(|_| AsrError::Timeout)?
-            .map_err(|_| AsrError::ConnectionFailed)?;
-
-        // Spawn send task
-        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(50);
-        tokio::spawn(async move {
-            while let Some(bytes) = send_rx.recv().await {
-                let _ = ws_sender.send(Message::Binary(bytes)).await;
-            }
-        });
-
-        // Receive loop
-        loop {
-            tokio::select! {
-                Some(frame) = audio_rx.recv() => {
-                    let bytes = frame_to_bytes(&frame);
-                    let _ = send_tx.try_send(bytes);
-                }
-                Some(msg) = ws_receiver.next() => {
-                    match msg? {
-                        Message::Text(json) => {
-                            let result: DeepgramResponse = serde_json::from_str(&json)?;
-                            if result.is_final {
-                                tx.send(PipelineEvent::FinalTranscript {
-                                    text: result.transcript.clone(),
-                                    language: self.language.clone(),
-                                }).await.ok();
-                            } else {
-                                tx.send(PipelineEvent::PartialTranscript {
-                                    text: result.transcript,
-                                    confidence: result.confidence,
-                                }).await.ok();
-                            }
-                        }
-                        Message::Close(_) => break,
-                        _ => {}
-                    }
-                }
-                else => break,
-            }
+        if let Some(lang) = &self.language {
+            form = form.text("language", lang.clone());
         }
+
+        let mut req = self.client.post(&url).multipart(form);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+
+        let resp = timeout(Duration::from_secs(60), req.send())
+            .await
+            .map_err(|_| AsrError::Timeout)??;
+
+        let result: TranscriptionResponse = resp.json().await?;
+        tx.send(PipelineEvent::FinalTranscript {
+            text: result.text,
+            language: self.language.clone().unwrap_or_default(),
+        }).await.ok();
+
         Ok(())
     }
 }
+```
+
+### Streaming ASR (SSE)
+
+Use `stream: true` to get `transcript.text.delta` events:
+
+```rust
+let form = form.text("stream", "true");
+// Response is SSE: transcript.text.delta → PartialTranscript
+//                  transcript.text.done  → FinalTranscript
 ```
 
 ## OpenAI streaming chat completions
@@ -201,63 +185,54 @@ impl LlmProvider for OpenAiProvider {
 }
 ```
 
-## ElevenLabs streaming TTS
+## OpenAI-compatible TTS (Speaches)
+
+Uses the standard OpenAI `/v1/audio/speech` endpoint with chunked transfer encoding for streaming.
 
 ```rust
-impl TtsProvider for ElevenLabsProvider {
+impl TtsProvider for SpeachesTtsProvider {
     async fn synthesize(
         &self,
         mut text_rx: Receiver<String>,
         tx: Sender<PipelineEvent>,
     ) -> Result<(), TtsError> {
-        let url = format!(
-            "wss://api.elevenlabs.io/v1/text-to-speech/{}/stream-input?model_id=eleven_multilingual_v2",
-            self.voice_id
-        );
+        let url = format!("{}/v1/audio/speech", self.base_url);
 
-        let (mut ws_sink, mut ws_stream) = connect_ws_with_auth(&url, &self.api_key).await?;
+        // Collect text to synthesize
+        let mut full_text = String::new();
+        while let Some(chunk) = text_rx.recv().await {
+            full_text.push_str(&chunk);
+        }
 
-        // Send BOS
-        ws_sink.send(Message::Text(serde_json::to_string(&json!({
-            "text": " ",
-            "voice_settings": { "stability": 0.5, "similarity_boost": 0.8 }
-        }))?)).await?;
+        let body = serde_json::json!({
+            "model": self.model,
+            "voice": self.voice,
+            "input": full_text,
+            "response_format": "pcm",  // raw 24kHz 16-bit LE
+        });
 
+        let mut req = self.client.post(&url).json(&body);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+
+        let response = timeout(Duration::from_secs(60), req.send())
+            .await
+            .map_err(|_| TtsError::Timeout)??;
+
+        // Stream chunked PCM audio
+        let mut stream = response.bytes_stream();
         let mut sequence: u32 = 0;
 
-        loop {
-            tokio::select! {
-                Some(text_chunk) = text_rx.recv() => {
-                    ws_sink.send(Message::Text(serde_json::to_string(&json!({
-                        "text": text_chunk,
-                    }))?)).await?;
-                }
-                Some(msg) = ws_stream.next() => {
-                    match msg? {
-                        Message::Text(json) => {
-                            let resp: ElevenLabsChunk = serde_json::from_str(&json)?;
-                            if let Some(audio_b64) = resp.audio {
-                                let pcm = decode_mp3_to_pcm(&base64::decode(audio_b64)?)?;
-                                let frame = AudioFrame {
-                                    data: pcm.into(),
-                                    sample_rate: 16000,
-                                    channels: 1,
-                                    timestamp_ms: 0,
-                                };
-                                tx.send(PipelineEvent::TtsAudioChunk { frame, sequence }).await.ok();
-                                sequence += 1;
-                            }
-                            if resp.is_final.unwrap_or(false) {
-                                tx.send(PipelineEvent::TtsComplete).await.ok();
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                else => break,
-            }
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|_| TtsError::StreamError)?;
+            let samples = bytes_to_i16_samples(&bytes);
+            let frame = AudioFrame::new(samples, 0);
+            tx.send(PipelineEvent::TtsAudioChunk { frame, sequence }).await.ok();
+            sequence += 1;
         }
+
+        tx.send(PipelineEvent::TtsComplete).await.ok();
         Ok(())
     }
 
@@ -266,6 +241,13 @@ impl TtsProvider for ElevenLabsProvider {
     }
 }
 ```
+
+### Supported output formats
+
+- `pcm` — raw 24kHz 16-bit signed LE (lowest latency, no decode overhead)
+- `wav` — uncompressed, low latency
+- `mp3` — default, general use
+- `opus` — low latency internet streaming
 
 ## Adding a new provider
 

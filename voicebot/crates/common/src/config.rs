@@ -32,16 +32,8 @@ pub struct SessionDefaultsConfig {
 pub struct AsrConfigGroup {
     pub primary: String,
     pub fallback: Option<String>,
-    pub deepgram: Option<DeepgramConfig>,
     pub whisper: Option<WhisperConfig>,
     pub speaches: Option<SpeachesAsrConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct DeepgramConfig {
-    pub api_key: String,
-    pub model: String,
-    pub language: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,15 +79,8 @@ pub struct AnthropicConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfigGroup {
-    pub elevenlabs: Option<ElevenLabsConfig>,
     pub coqui: Option<CoquiConfig>,
     pub speaches: Option<SpeachesTtsConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ElevenLabsConfig {
-    pub api_key: String,
-    pub voice_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -192,13 +177,6 @@ fn validate_config(config: &AppConfig) -> Result<(), ConfigError> {
 
     // Validate primary ASR provider has config
     match config.asr.primary.as_str() {
-        "deepgram" => {
-            if config.asr.deepgram.is_none() {
-                return Err(ConfigError::Invalid(
-                    "asr.primary is 'deepgram' but [asr.deepgram] section is missing".into(),
-                ));
-            }
-        }
         "whisper" => {
             if config.asr.whisper.is_none() {
                 return Err(ConfigError::Invalid(

@@ -49,16 +49,6 @@ pub fn build_providers(
             }
             Arc::new(provider)
         }
-        AsrProviderType::Deepgram => {
-            let cfg =
-                app_config.asr.deepgram.as_ref().ok_or_else(|| {
-                    SessionError::Internal("[asr.deepgram] config missing".into())
-                })?;
-            let provider =
-                asr::deepgram::DeepgramProvider::new(cfg.api_key.clone(), cfg.language.clone())
-                    .with_model(cfg.model.clone());
-            Arc::new(provider)
-        }
         AsrProviderType::Whisper => {
             // Whisper local not yet implemented — use stub
             Arc::new(StubAsrProvider)
@@ -101,15 +91,6 @@ pub fn build_providers(
             if let Some(key) = &cfg.api_key {
                 provider = provider.with_api_key(key.clone());
             }
-            Arc::new(provider)
-        }
-        TtsProviderType::ElevenLabs => {
-            let cfg =
-                app_config.tts.elevenlabs.as_ref().ok_or_else(|| {
-                    SessionError::Internal("[tts.elevenlabs] config missing".into())
-                })?;
-            let provider =
-                tts::elevenlabs::ElevenLabsProvider::new(cfg.api_key.clone(), cfg.voice_id.clone());
             Arc::new(provider)
         }
         TtsProviderType::Coqui => {
