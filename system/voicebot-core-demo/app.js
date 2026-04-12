@@ -24,9 +24,14 @@ let micActive = false;
 let currentBotMsg = null; // accumulates streaming agent text
 let currentUserMsg = null; // accumulates streaming transcript
 
-// Audio playback queue
-let playbackQueue = [];
-let isPlaying = false;
+// TTS audio accumulation for the current bot response
+let currentTtsChunks = []; // Array<ArrayBuffer> of raw PCM i16 LE chunks
+
+// Streaming playback scheduler (gapless via audioCtx.currentTime)
+let pendingChunks = []; // chunks not yet scheduled
+let scheduledUntil = 0; // audioCtx time up to which audio is already scheduled
+let prebufferFull = false;
+const PREBUFFER_MS = 400; // accumulate 400ms before starting to avoid underruns
 
 // --- Status ---
 function setStatus(state, label) {
@@ -150,6 +155,10 @@ function handleServerText(msg) {
             if (!currentBotMsg) {
                 currentBotMsg = addMessage('bot', msg.text, true);
                 currentBotMsg._fullText = msg.text;
+                currentTtsChunks = [];
+                pendingChunks = [];
+                scheduledUntil = 0;
+                prebufferFull = false;
             } else {
                 currentBotMsg._fullText += msg.text;
                 updateMessageText(currentBotMsg, currentBotMsg._fullText, true);
@@ -161,9 +170,19 @@ function handleServerText(msg) {
                 updateMessageText(currentBotMsg, msg.text, false);
             } else {
                 currentBotMsg = addMessage('bot', msg.text, false);
+                currentTtsChunks = [];
             }
-            currentBotMsg = null;
             setStatus('speaking', 'Speaking...');
+            break;
+
+        case 'tts_complete':
+            flushPendingAudio();
+            finalizeTtsAudio(currentBotMsg, currentTtsChunks);
+            currentBotMsg = null;
+            currentTtsChunks = [];
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                setStatus('connected', 'Connected');
+            }
             break;
 
         case 'error':
@@ -174,24 +193,33 @@ function handleServerText(msg) {
 
 // --- Audio playback ---
 function handleServerAudio(arrayBuffer) {
-    // Binary frames are raw PCM i16 LE at 16kHz mono
-    playbackQueue.push(arrayBuffer);
-    if (!isPlaying) drainPlaybackQueue();
+    currentTtsChunks.push(arrayBuffer);
+    pendingChunks.push(arrayBuffer);
+
+    if (!audioCtx) audioCtx = new AudioContext({sampleRate: SAMPLE_RATE});
+
+    if (!prebufferFull) {
+        const pendingMs =
+            (pendingChunks.reduce((n, b) => n + b.byteLength, 0) / (SAMPLE_RATE * 2)) * 1000;
+        if (pendingMs >= PREBUFFER_MS) prebufferFull = true;
+    }
+
+    if (prebufferFull) schedulePending();
 }
 
-async function drainPlaybackQueue() {
-    if (!audioCtx) {
-        audioCtx = new AudioContext({sampleRate: SAMPLE_RATE});
-    }
-    isPlaying = true;
+function schedulePending() {
+    if (!audioCtx || pendingChunks.length === 0) return;
 
-    while (playbackQueue.length > 0) {
-        const buf = playbackQueue.shift();
+    // If we've fallen behind real time (e.g. first chunk), re-anchor
+    if (scheduledUntil < audioCtx.currentTime + 0.01) {
+        scheduledUntil = audioCtx.currentTime + 0.05;
+    }
+
+    while (pendingChunks.length > 0) {
+        const buf = pendingChunks.shift();
         const i16 = new Int16Array(buf);
         const floats = new Float32Array(i16.length);
-        for (let i = 0; i < i16.length; i++) {
-            floats[i] = i16[i] / 32768;
-        }
+        for (let i = 0; i < i16.length; i++) floats[i] = i16[i] / 32768;
 
         const audioBuf = audioCtx.createBuffer(1, floats.length, SAMPLE_RATE);
         audioBuf.getChannelData(0).set(floats);
@@ -199,17 +227,79 @@ async function drainPlaybackQueue() {
         const src = audioCtx.createBufferSource();
         src.buffer = audioBuf;
         src.connect(audioCtx.destination);
+        src.start(scheduledUntil);
+        scheduledUntil += audioBuf.duration;
+    }
+}
 
-        await new Promise((resolve) => {
-            src.onended = resolve;
-            src.start();
-        });
+// Flush any chunks that didn't reach the pre-buffer threshold (last sentence).
+function flushPendingAudio() {
+    if (!audioCtx) return;
+    prebufferFull = true;
+    schedulePending();
+    // Reset scheduler state for next response
+    scheduledUntil = 0;
+    prebufferFull = false;
+    pendingChunks = [];
+}
+
+// Build a WAV file from raw PCM i16 LE chunks and attach an <audio> player
+// to the given message element.
+function finalizeTtsAudio(msgEl, chunks) {
+    if (!msgEl || chunks.length === 0) return;
+
+    // Concatenate all PCM chunks
+    const totalBytes = chunks.reduce((n, b) => n + b.byteLength, 0);
+    const pcm = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+        pcm.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
     }
 
-    isPlaying = false;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        setStatus('connected', 'Connected');
-    }
+    // Wrap in a minimal WAV container (16kHz mono 16-bit PCM)
+    const wavBytes = buildWav(pcm, SAMPLE_RATE, 1, 16);
+    const blob = new Blob([wavBytes], {type: 'audio/wav'});
+    const url = URL.createObjectURL(blob);
+
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.src = url;
+    audio.className = 'tts-player';
+    // Revoke object URL when no longer needed
+    audio.onended = () => {};
+
+    msgEl.appendChild(audio);
+    messagesEl.parentElement.scrollTop = messagesEl.parentElement.scrollHeight;
+}
+
+// Build a WAV ArrayBuffer from raw PCM bytes.
+function buildWav(pcmBytes, sampleRate, channels, bitsPerSample) {
+    const dataLen = pcmBytes.byteLength;
+    const buf = new ArrayBuffer(44 + dataLen);
+    const view = new DataView(buf);
+    const byteRate = sampleRate * channels * (bitsPerSample / 8);
+    const blockAlign = channels * (bitsPerSample / 8);
+
+    const writeStr = (off, s) => {
+        for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    };
+
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataLen, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true); // PCM chunk size
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    writeStr(36, 'data');
+    view.setUint32(40, dataLen, true);
+    new Uint8Array(buf, 44).set(pcmBytes);
+    return buf;
 }
 
 // --- Microphone ---
@@ -290,7 +380,13 @@ async function startMic() {
     };
 
     source.connect(processor);
-    processor.connect(audioCtx.destination); // required for ScriptProcessor to fire
+    // ScriptProcessor requires a graph connection to fire onaudioprocess,
+    // but we must NOT route mic audio to the speakers (feedback loop).
+    // A zero-gain node silences the output while keeping the node active.
+    const silentGain = audioCtx.createGain();
+    silentGain.gain.value = 0;
+    processor.connect(silentGain);
+    silentGain.connect(audioCtx.destination);
 
     micActive = true;
     btnMic.classList.add('active');
