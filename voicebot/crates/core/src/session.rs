@@ -29,6 +29,21 @@ struct BufferedAudioStream {
     frames: VecDeque<AudioFrame>,
 }
 
+struct ActiveAsrTurn {
+    turn_id: u64,
+    audio_tx: Option<Sender<AudioFrame>>,
+    cancel_token: CancellationToken,
+    capture_open: bool,
+}
+
+impl ActiveAsrTurn {
+    fn cancel(&mut self) {
+        self.cancel_token.cancel();
+        self.audio_tx = None;
+        self.capture_open = false;
+    }
+}
+
 impl BufferedAudioStream {
     fn new(frames: Vec<AudioFrame>) -> Self {
         Self {
@@ -111,6 +126,13 @@ impl AsrProvider for FallbackAsrProvider {
                 None => Err(err),
             },
             Err(err) => Err(err),
+        }
+    }
+
+    async fn cancel(&self) {
+        self.primary.cancel().await;
+        if let Some(fallback) = &self.fallback {
+            fallback.cancel().await;
         }
     }
 }
@@ -384,6 +406,7 @@ impl PipelineSession {
         // Using mpsc (not watch) so events are queued and never missed,
         // even if the fanout is busy sending audio frames.
         let (speech_state_tx, mut speech_state_rx) = tokio::sync::mpsc::channel::<bool>(8);
+        let (asr_done_tx, mut asr_done_rx) = tokio::sync::mpsc::channel::<u64>(8);
 
         // Fanout + per-utterance ASR spawner.
         // Keeps a small pre-buffer so frames before the watch update are included in the utterance.
@@ -395,7 +418,8 @@ impl PipelineSession {
         handles.push(tokio::spawn(async move {
             let mut rx = audio_rx;
             let mut pre_buffer: VecDeque<AudioFrame> = VecDeque::with_capacity(PRE_BUFFER_FRAMES + 1);
-            let mut current_asr_tx: Option<tokio::sync::mpsc::Sender<AudioFrame>> = None;
+            let mut current_asr: Option<ActiveAsrTurn> = None;
+            let mut next_turn_id: u64 = 0;
 
             loop {
                 tokio::select! {
@@ -403,22 +427,47 @@ impl PipelineSession {
 
                     _ = fanout_token.cancelled() => break,
 
+                    done_turn_id = asr_done_rx.recv() => {
+                        match done_turn_id {
+                            Some(turn_id) if current_asr.as_ref().map(|turn| turn.turn_id) == Some(turn_id) => {
+                                current_asr = None;
+                            }
+                            Some(_) => {}
+                            None => break,
+                        }
+                    }
+
                     // Process speech state transitions immediately as they arrive.
                     // Using a separate select arm means we never miss an event
                     // regardless of audio frame timing.
                     speaking = speech_state_rx.recv() => {
                         match speaking {
-                            Some(true) if current_asr_tx.is_none() => {
+                            Some(true) => {
+                                if let Some(turn) = current_asr.as_mut() {
+                                    if turn.capture_open {
+                                        continue;
+                                    }
+                                    turn.cancel();
+                                }
+
                                 // Speech started: open utterance channel, pre-fill, spawn ASR.
+                                next_turn_id += 1;
+                                let turn_id = next_turn_id;
                                 let (asr_tx, asr_rx) = tokio::sync::mpsc::channel::<AudioFrame>(200);
                                 for buffered in pre_buffer.drain(..) {
                                     let _ = asr_tx.try_send(buffered);
                                 }
-                                current_asr_tx = Some(asr_tx);
                                 let asr_clone = Arc::clone(&asr_for_fanout);
                                 let ev_tx = asr_event_tx.clone();
                                 let handler = Arc::clone(&asr_failure_handler);
                                 let asr_cancel = fanout_token.child_token();
+                                let asr_done = asr_done_tx.clone();
+                                current_asr = Some(ActiveAsrTurn {
+                                    turn_id,
+                                    audio_tx: Some(asr_tx),
+                                    cancel_token: asr_cancel.clone(),
+                                    capture_open: true,
+                                });
                                 tokio::spawn(async move {
                                     tracing::info!("ASR provider call started");
                                     let audio_stream = ReceiverAudioStream::new(asr_rx);
@@ -435,14 +484,17 @@ impl PipelineSession {
                                             handler.on_provider_failure(Component::Asr, &e);
                                         }
                                     }
+                                    let _ = asr_done.send(turn_id).await;
                                 });
                             }
                             Some(false) => {
                                 // Speech ended: drop sender — ASR drains remaining frames then processes.
-                                current_asr_tx = None;
+                                if let Some(turn) = current_asr.as_mut() {
+                                    turn.capture_open = false;
+                                    turn.audio_tx = None;
+                                }
                             }
                             None => break, // VAD task exited
-                            _ => {}
                         }
                     }
 
@@ -460,8 +512,12 @@ impl PipelineSession {
                         }
 
                         // Forward to current ASR utterance if speech is active.
-                        if let Some(ref tx) = current_asr_tx {
-                            let _ = tx.try_send(f.clone());
+                        if let Some(turn) = current_asr.as_mut() {
+                            if turn.capture_open {
+                                if let Some(tx) = turn.audio_tx.as_ref() {
+                                    let _ = tx.try_send(f.clone());
+                                }
+                            }
                         }
 
                         // Forward to VAD. Using send().await provides backpressure
@@ -584,6 +640,8 @@ mod tests {
             while audio.recv().await.is_some() {}
             Err(AsrError::ConnectionFailed)
         }
+
+        async fn cancel(&self) {}
     }
 
     struct SuccessfulAsrProvider {
@@ -607,6 +665,8 @@ mod tests {
             .map_err(|_| AsrError::ChannelClosed)?;
             Ok(())
         }
+
+        async fn cancel(&self) {}
     }
 
     struct FailingLlmProvider {

@@ -349,6 +349,47 @@ impl common::traits::AsrProvider for FailingAsrProvider {
         while audio.recv().await.is_some() {}
         Err(common::error::AsrError::ConnectionFailed)
     }
+
+    async fn cancel(&self) {}
+}
+
+struct SlowSequentialAsrProvider {
+    call_count: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl common::traits::AsrProvider for SlowSequentialAsrProvider {
+    async fn stream(
+        &self,
+        mut audio: Box<dyn common::traits::AudioInputStream>,
+        tx: tokio::sync::mpsc::Sender<PipelineEvent>,
+    ) -> Result<(), common::error::AsrError> {
+        while audio.recv().await.is_some() {}
+
+        let call_index = self
+            .call_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+
+        let text = if call_index == 1 {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            "first transcript"
+        } else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            "second transcript"
+        };
+
+        tx.send(PipelineEvent::FinalTranscript {
+            text: text.into(),
+            language: "en".into(),
+        })
+        .await
+        .map_err(|_| common::error::AsrError::ChannelClosed)?;
+
+        Ok(())
+    }
+
+    async fn cancel(&self) {}
 }
 
 struct FailingLlmProvider;
@@ -460,6 +501,75 @@ async fn test_llm_provider_failure_is_handled() {
         error.contains("connection") || error.contains("LLM"),
         "unexpected error: {error}"
     );
+}
+
+#[tokio::test]
+async fn test_new_speech_cancels_previous_asr_turn() {
+    let config = default_config();
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
+    let (egress_tx, mut egress_rx) = mpsc::channel::<PipelineEvent>(200);
+    let asr = Arc::new(SlowSequentialAsrProvider {
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    });
+    let llm: Arc<dyn common::traits::LlmProvider> = Arc::new(agent::stub::StubLlmProvider);
+    let tts: Arc<dyn common::traits::TtsProvider> = Arc::new(tts::stub::StubTtsProvider);
+
+    let mut session =
+        voicebot_core::session::PipelineSession::start(config, audio_rx, egress_tx, asr, llm, tts)
+            .await
+            .expect("session start failed");
+
+    for frame in make_speech_frames(25) {
+        audio_tx.send(frame).await.expect("send first speech");
+    }
+    for frame in make_silence_frames(50, 25) {
+        audio_tx.send(frame).await.expect("send first silence");
+    }
+
+    for frame in make_speech_frames(25)
+        .into_iter()
+        .enumerate()
+        .map(|(idx, frame)| AudioFrame::new(frame.data.to_vec(), 1500 + idx as u64 * 20))
+    {
+        audio_tx.send(frame).await.expect("send second speech");
+    }
+    for frame in make_silence_frames(50, 100) {
+        audio_tx.send(frame).await.expect("send second silence");
+    }
+    drop(audio_tx);
+
+    let mut saw_second_transcript = false;
+    let mut saw_first_transcript = false;
+
+    let result = timeout(Duration::from_secs(10), async {
+        while let Some(event) = egress_rx.recv().await {
+            match event {
+                PipelineEvent::FinalTranscript { text, .. } => {
+                    if text == "first transcript" {
+                        saw_first_transcript = true;
+                    }
+                    if text == "second transcript" {
+                        saw_second_transcript = true;
+                    }
+                }
+                PipelineEvent::TtsComplete if saw_second_transcript => break,
+                _ => {}
+            }
+        }
+    })
+    .await;
+
+    assert!(result.is_ok(), "pipeline did not finish within timeout");
+    assert!(
+        saw_second_transcript,
+        "expected second transcript after barge-in"
+    );
+    assert!(
+        !saw_first_transcript,
+        "previous ASR turn should have been cancelled"
+    );
+
+    session.terminate().await;
 }
 
 /// TTS ConnectionFailed must invoke the failure handler with component "tts".

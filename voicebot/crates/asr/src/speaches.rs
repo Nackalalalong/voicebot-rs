@@ -184,6 +184,10 @@ impl AsrProvider for SpeachesAsrProvider {
 
         Ok(())
     }
+
+    async fn cancel(&self) {
+        // The active request is cancelled by dropping the task future.
+    }
 }
 
 #[cfg(test)]

@@ -105,6 +105,7 @@ pub trait AudioOutputStream: Send {
 pub trait AsrProvider: Send + Sync {
     async fn stream(&self, audio: impl AudioInputStream, tx: Sender<PipelineEvent>)
         -> Result<(), AsrError>;
+    async fn cancel(&self);
 }
 
 pub trait TtsProvider: Send + Sync {
@@ -190,20 +191,24 @@ The orchestrator is the brain. It owns the `PipelineEvent` channel and drives st
 ```
 Idle  ──SpeechStarted──►  Listening
 Listening ──SpeechEnded──►  Transcribing
+Transcribing ──SpeechStarted──► Listening   (cancel prior ASR turn, start new utterance)
 Transcribing ──FinalTranscript──►  AgentThinking
 AgentThinking ──AgentFinalResponse──►  Speaking
 Speaking ──TtsComplete──►  Idle
-Speaking ──Interrupt──►  Idle      (cancel TTS + agent, go back to Listening)
+AgentThinking ──SpeechStarted──► Listening  (cancel prior LLM turn, preserve streamed partial text)
+Speaking ──SpeechStarted──►  Listening      (cancel prior TTS/LLM turn, start new utterance)
+Speaking ──Interrupt──►  Idle
 Any state ──Cancel──►  Idle
 ```
 
 **Interrupt handling MUST:**
 
-1. Send `cancel()` to TTS provider immediately
-2. Send `cancel()` to LLM provider
-3. Drop all buffered `TtsAudioChunk` events
-4. Flush ASR buffers
-5. Transition to `Idle`, await next `SpeechStarted`
+1. Cancel the in-flight ASR turn if the previous utterance is still transcribing when a new `SpeechStarted` arrives
+2. Cancel the in-flight LLM turn cooperatively; do not rely on `JoinHandle::abort()` as the primary mechanism
+3. Persist only the already streamed assistant text into conversation history when the LLM turn is interrupted
+4. Cancel the in-flight TTS turn cooperatively and stop audio emission immediately
+5. Drop buffered TTS text/audio for the interrupted turn
+6. Transition to `Listening` and continue processing the new utterance
 
 **Interrupt vs Cancel vs Flush vs Replace:**
 
@@ -258,6 +263,7 @@ Must support:
 
 - Speaches / OpenAI-compatible server via `POST /v1/audio/transcriptions`
 - Whisper via `whisper-rs` (local fallback)
+- Cooperative cancellation of the current utterance so a new `SpeechStarted` can discard an older transcription still in progress
 
 On `SpeechEnded`: flush remaining buffer and emit `FinalTranscript`. On provider error: retry up to 3 times with 200ms backoff; on failure emit `ComponentError { recoverable: false }`.
 

@@ -27,4 +27,8 @@ impl AsrProvider for StubAsrProvider {
 
         Ok(())
     }
+
+    async fn cancel(&self) {
+        // no-op
+    }
 }

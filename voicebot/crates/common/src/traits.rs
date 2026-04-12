@@ -28,6 +28,9 @@ pub trait AsrProvider: Send + Sync {
         audio: Box<dyn AudioInputStream>,
         tx: Sender<PipelineEvent>,
     ) -> Result<(), AsrError>;
+
+    /// Cancel ongoing transcription for the current utterance.
+    async fn cancel(&self);
 }
 
 /// TTS provider trait — receives text chunks, emits audio events.

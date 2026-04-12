@@ -30,6 +30,7 @@ pub struct Orchestrator {
     cancel_token: CancellationToken,
 
     // Optional providers — when set, orchestrator triggers downstream components
+    llm: Option<Arc<dyn LlmProvider>>,
     tts: Option<Arc<dyn TtsProvider>>,
 
     // Persistent agent — lives for the session so ConversationMemory is preserved across turns.
@@ -42,6 +43,8 @@ pub struct Orchestrator {
     // Active task handles for cancellation
     agent_handle: Option<JoinHandle<()>>,
     tts_handle: Option<JoinHandle<()>>,
+    agent_turn_cancel: Option<CancellationToken>,
+    tts_turn_cancel: Option<CancellationToken>,
 
     // Sentence-boundary TTS: accumulates partial text and sends complete sentences
     tts_text_tx: Option<Sender<String>>,
@@ -63,10 +66,13 @@ impl Orchestrator {
             event_tx: None,
             egress_tx,
             cancel_token,
+            llm: None,
             tts: None,
             agent: None,
             agent_handle: None,
             tts_handle: None,
+            agent_turn_cancel: None,
+            tts_turn_cancel: None,
             tts_text_tx: None,
             sentence_buffer: String::new(),
             failure_handler: Arc::new(PanicOnProviderError),
@@ -85,7 +91,7 @@ impl Orchestrator {
         failure_handler: Arc<dyn ProviderFailureHandler>,
         system_prompt: Option<String>,
     ) -> Self {
-        let agent = AgentCore::new(llm, vec![], system_prompt, CancellationToken::new());
+        let agent = AgentCore::new(llm.clone(), vec![], system_prompt, CancellationToken::new());
         Self {
             state: OrchestratorState::Idle,
             session_id,
@@ -93,10 +99,13 @@ impl Orchestrator {
             event_tx: Some(event_tx),
             egress_tx,
             cancel_token,
+            llm: Some(llm.clone()),
             tts: Some(tts),
             agent: Some(Arc::new(Mutex::new(agent))),
             agent_handle: None,
             tts_handle: None,
+            agent_turn_cancel: None,
+            tts_turn_cancel: None,
             tts_text_tx: None,
             sentence_buffer: String::new(),
             failure_handler,
@@ -112,6 +121,7 @@ impl Orchestrator {
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
                     info!(session_id = %self.session_id, "orchestrator cancelled");
+                    self.cancel_active_tasks().await;
                     self.state = OrchestratorState::Idle;
                     break;
                 }
@@ -173,6 +183,13 @@ impl Orchestrator {
                 self.trigger_agent(transcript);
                 return;
             }
+            (OrchestratorState::Transcribing, PipelineEvent::SpeechStarted { .. }) => {
+                info!(session_id = %self.session_id, "barge-in during transcription, cancelling previous ASR turn");
+                self.cancel_active_tasks().await;
+                crate::observability::record_interrupt();
+                self.state = OrchestratorState::Listening;
+                return;
+            }
 
             // Forward agent partial responses — extract sentences for TTS
             (
@@ -222,7 +239,7 @@ impl Orchestrator {
             // Barge-in: user starts speaking while LLM is generating → cancel and listen
             (OrchestratorState::AgentThinking, PipelineEvent::SpeechStarted { .. }) => {
                 info!(session_id = %self.session_id, "barge-in during agent thinking, interrupting LLM");
-                self.cancel_active_tasks();
+                self.cancel_active_tasks().await;
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
                 return;
@@ -231,7 +248,7 @@ impl Orchestrator {
             // Barge-in: user starts speaking during TTS playback → interrupt
             (OrchestratorState::Speaking, PipelineEvent::SpeechStarted { .. }) => {
                 info!(session_id = %self.session_id, "barge-in during speaking, interrupting TTS");
-                self.cancel_active_tasks();
+                self.cancel_active_tasks().await;
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
                 return;
@@ -240,7 +257,7 @@ impl Orchestrator {
             // Interrupt — only valid during Speaking
             (OrchestratorState::Speaking, PipelineEvent::Interrupt) => {
                 info!(session_id = %self.session_id, "interrupt during speaking, returning to Idle");
-                self.cancel_active_tasks();
+                self.cancel_active_tasks().await;
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Idle;
                 return;
@@ -249,7 +266,7 @@ impl Orchestrator {
             // Cancel — valid from any state
             (_, PipelineEvent::Cancel) => {
                 info!(session_id = %self.session_id, state = ?self.state, "cancel received, returning to Idle");
-                self.cancel_active_tasks();
+                self.cancel_active_tasks().await;
                 self.state = OrchestratorState::Idle;
                 return;
             }
@@ -297,6 +314,7 @@ impl Orchestrator {
         // Per-turn cancellation token — cancelling this aborts the LLM call
         // without touching other session-level state.
         let cancel_token = self.cancel_token.child_token();
+        self.agent_turn_cancel = Some(cancel_token.clone());
 
         let failure_handler = Arc::clone(&self.failure_handler);
         let session_id = self.session_id;
@@ -330,14 +348,19 @@ impl Orchestrator {
             return;
         };
         let (text_tx, text_rx) = tokio::sync::mpsc::channel::<String>(20);
+        let cancel_token = self.cancel_token.child_token();
 
         self.tts_text_tx = Some(text_tx);
+        self.tts_turn_cancel = Some(cancel_token.clone());
 
         let failure_handler = Arc::clone(&self.failure_handler);
         let session_id = self.session_id;
         self.tts_handle = Some(tokio::spawn(async move {
             info!(session_id = %session_id, "TTS provider call started");
-            let result = tts.synthesize(text_rx, event_tx).await;
+            let result = tokio::select! {
+                result = tts.synthesize(text_rx, event_tx) => result,
+                _ = cancel_token.cancelled() => Err(common::error::TtsError::Cancelled),
+            };
             match &result {
                 Ok(()) => info!(session_id = %session_id, "TTS provider call completed"),
                 Err(e) => warn!(session_id = %session_id, error = %e, "TTS provider call failed"),
@@ -413,12 +436,28 @@ impl Orchestrator {
     }
 
     /// Cancel any active agent or TTS tasks.
-    fn cancel_active_tasks(&mut self) {
+    async fn cancel_active_tasks(&mut self) {
+        if let Some(token) = self.agent_turn_cancel.take() {
+            token.cancel();
+        }
+        if let Some(token) = self.tts_turn_cancel.take() {
+            token.cancel();
+        }
+        if let Some(llm) = self.llm.clone() {
+            llm.cancel().await;
+        }
+        if let Some(tts) = self.tts.clone() {
+            tts.cancel().await;
+        }
         if let Some(handle) = self.agent_handle.take() {
-            handle.abort();
+            tokio::spawn(async move {
+                let _ = handle.await;
+            });
         }
         if let Some(handle) = self.tts_handle.take() {
-            handle.abort();
+            tokio::spawn(async move {
+                let _ = handle.await;
+            });
         }
         self.tts_text_tx = None;
         self.sentence_buffer.clear();
@@ -576,6 +615,32 @@ mod tests {
             .expect("orchestrator timed out");
 
         assert_eq!(orch.state(), OrchestratorState::Idle);
+        cancel_token.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_barge_in_during_transcribing_returns_to_listening() {
+        let (mut orch, event_tx, _egress_rx, cancel_token) = create_orchestrator().await;
+
+        event_tx
+            .send(PipelineEvent::SpeechStarted { timestamp_ms: 0 })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::SpeechEnded { timestamp_ms: 500 })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::SpeechStarted { timestamp_ms: 800 })
+            .await
+            .expect("send failed");
+        drop(event_tx);
+
+        timeout(Duration::from_secs(2), orch.run())
+            .await
+            .expect("orchestrator timed out");
+
+        assert_eq!(orch.state(), OrchestratorState::Listening);
         cancel_token.cancel();
     }
 

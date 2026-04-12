@@ -20,6 +20,11 @@ pub struct AgentCore {
     cancel_token: CancellationToken,
 }
 
+enum LlmCompletionOutcome {
+    Completed,
+    Cancelled,
+}
+
 impl AgentCore {
     pub fn new(
         llm: Arc<dyn LlmProvider>,
@@ -94,11 +99,18 @@ impl AgentCore {
             }
 
             // Wait for LLM task
-            match llm_handle.await {
-                Ok(Ok(())) => {}
-                Ok(Err(LlmError::Cancelled)) => return Err(AgentError::Cancelled),
+            let completion = match llm_handle.await {
+                Ok(Ok(())) => LlmCompletionOutcome::Completed,
+                Ok(Err(LlmError::Cancelled)) => LlmCompletionOutcome::Cancelled,
                 Ok(Err(e)) => return Err(AgentError::LlmError(e.to_string())),
                 Err(e) => return Err(AgentError::Internal(e.to_string())),
+            };
+
+            if matches!(completion, LlmCompletionOutcome::Cancelled) {
+                if !full_text.trim().is_empty() {
+                    self.memory.push(Message::assistant(&full_text));
+                }
+                return Err(AgentError::Cancelled);
             }
 
             // No tool calls = done
@@ -150,5 +162,67 @@ impl AgentCore {
     /// the current LLM request, not the whole session.
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
         self.cancel_token = token;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use async_trait::async_trait;
+    use common::types::Role;
+    use tokio::sync::mpsc;
+
+    struct PartialThenPendingLlmProvider;
+
+    #[async_trait]
+    impl LlmProvider for PartialThenPendingLlmProvider {
+        async fn stream_completion(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+            tx: Sender<PipelineEvent>,
+        ) -> Result<(), LlmError> {
+            tx.send(PipelineEvent::AgentPartialResponse {
+                text: "partial answer".into(),
+            })
+            .await
+            .map_err(|_| LlmError::StreamError("channel closed".into()))?;
+
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+
+        async fn cancel(&self) {}
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_turn_memory_contains_partial_assistant_message() {
+        let cancel_token = CancellationToken::new();
+        let mut agent = AgentCore::new(
+            Arc::new(PartialThenPendingLlmProvider),
+            vec![],
+            None,
+            cancel_token.clone(),
+        );
+        let (tx, mut rx) = mpsc::channel::<PipelineEvent>(8);
+
+        let turn = tokio::spawn(async move {
+            let result = agent.handle_turn("hello".into(), tx).await;
+            (agent, result)
+        });
+
+        let _ = rx.recv().await;
+        cancel_token.cancel();
+
+        let (agent, result) = turn.await.expect("agent task join");
+        assert!(matches!(result, Err(AgentError::Cancelled)));
+
+        let messages = agent.memory().as_slice();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[0].content.as_deref(), Some("hello"));
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[1].content.as_deref(), Some("partial answer"));
     }
 }

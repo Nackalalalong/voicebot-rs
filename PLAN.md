@@ -10,12 +10,12 @@
 | --- | --- | --- | --: | --- |
 | 1 | **common** — types, traits, errors, config, retry | ✅ Done | 19 | `AudioFrame`, `PipelineEvent`, provider traits, `SessionConfig`, env-var substitution, `with_retry`, `TestAudioStream` |
 | 2 | **vad** — energy-threshold VAD + Speaches | ✅ Done | 14 | `rms_energy`, `is_voiced`, `FrameChunker`, `VadComponent` state machine, `SpeachesVadClient` batch VAD via `/v1/audio/speech/timestamps` |
-| 3 | **core** — orchestrator + session + stubs | ✅ Done | 13+2i | `Orchestrator` with provider triggering, sentence-boundary TTS streaming, barge-in interrupt, `PipelineSession` with audio fanout, 7 integration tests (3 E2E), `build_providers()` factory, `start_with_config()`. 2 ignored Speaches tests |
+| 3 | **core** — orchestrator + session + stubs | ✅ Done | 13+2i | `Orchestrator` with provider triggering, sentence-boundary TTS streaming, cooperative barge-in cancellation for ASR/LLM/TTS, partial assistant history retention on LLM interrupt, `PipelineSession` with per-utterance ASR fanout, 7 integration tests (3 E2E), `build_providers()` factory, `start_with_config()`. 2 ignored Speaches tests |
 | 4 | **transport/websocket** — WS server + protocol | ✅ Done | 6 | Axum handler, dual router (`router()` stubs, `router_with_config()` real), `ClientMessage`/`ServerMessage` JSON, bidirectional bridge |
 | 5 | **asr** — Speaches OpenAI-compatible provider | ✅ Done | 2+3i | `SpeachesAsrProvider` multipart POST to `/v1/audio/transcriptions` with SSE streaming (`stream: true`), partial transcript events. 3 ignored Speaches integration tests. **Skipped:** Realtime WS mode (Speaches bug) |
-| 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 7 | `OpenAiProvider` SSE streaming with configurable `base_url` (works with any OpenAI-compatible server), `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, `Tool` trait. **Missing:** integration test, concrete tool impls |
+| 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 8 | `OpenAiProvider` SSE streaming with configurable `base_url` (works with any OpenAI-compatible server), `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, streamed-partial retention on cancellation, `Tool` trait. **Missing:** integration test, concrete tool impls |
 | 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM from `/v1/audio/speech`, cancel support, sentence-boundary streaming wired in orchestrator. 4 ignored Speaches integration tests |
-| 8 | **Integration** — end-to-end with interrupt | ✅ Done | 7 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test |
+| 8 | **Integration** — end-to-end with interrupt | ✅ Done | 8 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test, new-speech-cancels-previous-ASR regression |
 | 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root, ignored integration tests for ARI REST, WebSocket, endpoint status, and originate/hangup. |
 | 10 | **Observability** — metrics, config validation, fallbacks | ✅ Done | 2 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown, fallback provider wiring in `core::session`, session lifecycle metrics in `PipelineSession` |
 
@@ -70,7 +70,8 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 - [x] **SSE streaming ASR** — use `stream: true` on `/v1/audio/transcriptions` to emit `PartialTranscript` events
 - [~] **Realtime WebSocket ASR** — use Speaches `/v1/realtime` for full-duplex audio streaming (lower latency) _(skipped — Speaches bug)_
 - [x] **Sentence-boundary TTS** — orchestrator extracts sentences from agent partial responses, sends each to TTS immediately
-- [x] **Barge-in interrupt** — SpeechStarted during Speaking cancels TTS and returns to Listening
+- [x] **Barge-in interrupt** — SpeechStarted during Transcribing, AgentThinking, or Speaking cancels the previous turn and returns to Listening
+- [x] **Interrupted partial history retention** — keep only the already streamed assistant text when LLM output is cut off by new speech
 
 ### Priority 2 — End-to-end integration (M8)
 
@@ -83,6 +84,7 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 - [x] E2E pipeline integration test — `#[ignore]` test using Speaches ASR+TTS
 - [x] **E2E interrupt test** — barge-in during speaking cancels TTS, returns to Listening
 - [x] **Sentence boundary test** — verifies sentence extraction and flushing logic
+- [x] **ASR interrupt regression** — new speech cancels an older ASR transcription that is still finishing
 - [ ] **FinalTranscript never-drop test** — verify backpressure doesn't lose transcripts
 
 ### Priority 3 — Agent improvements (M6)
