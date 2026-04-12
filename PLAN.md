@@ -1,6 +1,6 @@
 # PLAN — voicebot-rs
 
-> 69 tests passing + 9 ignored integration tests · 9 crates · Milestones 1–8 and 10 complete, 9 partial
+> 69 tests passing + 13 ignored integration tests · 9 crates · Milestones 1–5 and 7–10 complete, 6 partial
 
 ---
 
@@ -16,7 +16,7 @@
 | 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 7 | `OpenAiProvider` SSE streaming with configurable `base_url` (works with any OpenAI-compatible server), `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, `Tool` trait. **Missing:** integration test, concrete tool impls |
 | 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM from `/v1/audio/speech`, cancel support, sentence-boundary streaming wired in orchestrator. 4 ignored Speaches integration tests |
 | 8 | **Integration** — end-to-end with interrupt | ✅ Done | 7 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test |
-| 9 | **transport/asterisk** — ARI adapter | 🟡 In Progress | 0 | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root. |
+| 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root, ignored integration tests for ARI REST, WebSocket, endpoint status, and originate/hangup. |
 | 10 | **Observability** — metrics, config validation, fallbacks | ✅ Done | 2 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown, fallback provider wiring in `core::session`, session lifecycle metrics in `PipelineSession` |
 
 ---
@@ -101,7 +101,7 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 - [x] **ARI REST client** — answer, externalMedia, bridge, hangup via reqwest
 - [x] **DTMF → cancel** — `#` or `*` cancels session via CancellationToken
 - [x] **Bridge cleanup** — destroy bridge and hang up on session end or error
-- [ ] **Integration test** — `#[ignore]` test with real Asterisk
+- [x] **Integration test** — `#[ignore]` tests with real Asterisk
 - [x] **Docker Compose** — `system/asterisk/docker-compose.yaml` for local testing
 
 ### Priority 5 — Observability + hardening (M10)
@@ -126,7 +126,7 @@ voicebot/crates/
   core/            11+2i      ← Orchestrator, PipelineSession, build_providers(), observability
   transport/
     websocket/      6 tests   ← Axum WS handler (stubs + config), JSON protocol
-    asterisk/       0 tests   ← (empty)
+    asterisk/       0+4i      ← ARI REST/WebSocket/originate integration tests
   server/           0 tests   ← Binary entry point (main.rs)
 ```
 

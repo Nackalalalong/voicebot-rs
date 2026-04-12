@@ -25,6 +25,80 @@ impl AriRestClient {
         }
     }
 
+    /// GET /asterisk/info
+    pub async fn asterisk_info(&self) -> Result<serde_json::Value, AriError> {
+        let url = format!("{}/asterisk/info", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(AriError::Rest {
+                status: resp.status().as_u16(),
+                url,
+            });
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// GET /endpoints/{technology}/{resource}
+    pub async fn endpoint(
+        &self,
+        technology: &str,
+        resource: &str,
+    ) -> Result<serde_json::Value, AriError> {
+        let url = format!("{}/endpoints/{}/{}", self.base_url, technology, resource);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(AriError::Rest {
+                status: resp.status().as_u16(),
+                url,
+            });
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// POST /channels?endpoint=...&app=... — create a channel directly into a Stasis app.
+    ///
+    /// Returns the new channel ID.
+    pub async fn originate_in_app(
+        &self,
+        endpoint: &str,
+        app_name: &str,
+        caller_id: &str,
+    ) -> Result<String, AriError> {
+        let url = format!("{}/channels", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .query(&[
+                ("endpoint", endpoint),
+                ("app", app_name),
+                ("callerId", caller_id),
+            ])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(AriError::Rest {
+                status: resp.status().as_u16(),
+                url,
+            });
+        }
+        let body: serde_json::Value = resp.json().await?;
+        body["id"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| AriError::Protocol("channel response missing 'id'".into()))
+    }
+
     /// POST /channels/{channelId}/answer
     pub async fn answer_channel(&self, channel_id: &str) -> Result<(), AriError> {
         let url = format!("{}/channels/{}/answer", self.base_url, channel_id);
