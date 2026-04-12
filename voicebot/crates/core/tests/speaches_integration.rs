@@ -63,6 +63,7 @@ fn test_app_config() -> AppConfig {
             }),
         },
         channels: ChannelConfig::default(),
+        asterisk: None,
     }
 }
 

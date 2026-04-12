@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub tts: TtsConfigGroup,
     #[serde(default)]
     pub channels: ChannelConfig,
+    pub asterisk: Option<AsteriskConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,6 +110,33 @@ impl Default for ChannelConfig {
             event_bus_capacity: 200,
         }
     }
+}
+
+/// Asterisk ARI transport configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AsteriskConfig {
+    /// ARI hostname (e.g. "localhost" or "asterisk").
+    pub ari_host: String,
+    /// ARI HTTP/WS port (default 8088).
+    #[serde(default = "default_ari_port")]
+    pub ari_port: u16,
+    /// ARI username.
+    pub username: String,
+    /// ARI password.
+    pub password: String,
+    /// Stasis application name (must match dialplan).
+    #[serde(default = "default_app_name")]
+    pub app_name: String,
+    /// Our host address that Asterisk can reach for AudioSocket TCP connections.
+    pub audio_host: String,
+}
+
+fn default_ari_port() -> u16 {
+    8088
+}
+
+fn default_app_name() -> String {
+    "voicebot".into()
 }
 
 /// Configuration errors.
