@@ -1,6 +1,6 @@
 # PLAN — voicebot-rs
 
-> 63 tests passing + 9 ignored integration tests · 9 crates · Milestones 1–7 complete, 8+10 partial
+> 69 tests passing + 9 ignored integration tests · 9 crates · Milestones 1–8 and 10 complete, 9 partial
 
 ---
 
@@ -12,12 +12,12 @@
 | 2 | **vad** — energy-threshold VAD + Speaches | ✅ Done | 14 | `rms_energy`, `is_voiced`, `FrameChunker`, `VadComponent` state machine, `SpeachesVadClient` batch VAD via `/v1/audio/speech/timestamps` |
 | 3 | **core** — orchestrator + session + stubs | ✅ Done | 13+2i | `Orchestrator` with provider triggering, sentence-boundary TTS streaming, barge-in interrupt, `PipelineSession` with audio fanout, 7 integration tests (3 E2E), `build_providers()` factory, `start_with_config()`. 2 ignored Speaches tests |
 | 4 | **transport/websocket** — WS server + protocol | ✅ Done | 6 | Axum handler, dual router (`router()` stubs, `router_with_config()` real), `ClientMessage`/`ServerMessage` JSON, bidirectional bridge |
-| 5 | **asr** — Speaches OpenAI-compatible provider | ✅ Done | 2+3i | `SpeachesAsrProvider` multipart POST to `/v1/audio/transcriptions` with SSE streaming (`stream: true`), partial transcript events. 3 ignored Speaches integration tests. **Missing:** Realtime WS mode |
+| 5 | **asr** — Speaches OpenAI-compatible provider | ✅ Done | 2+3i | `SpeachesAsrProvider` multipart POST to `/v1/audio/transcriptions` with SSE streaming (`stream: true`), partial transcript events. 3 ignored Speaches integration tests. **Skipped:** Realtime WS mode (Speaches bug) |
 | 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 7 | `OpenAiProvider` SSE streaming with configurable `base_url` (works with any OpenAI-compatible server), `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, `Tool` trait. **Missing:** integration test, concrete tool impls |
 | 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM from `/v1/audio/speech`, cancel support, sentence-boundary streaming wired in orchestrator. 4 ignored Speaches integration tests |
 | 8 | **Integration** — end-to-end with interrupt | ✅ Done | 7 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test |
-| 9 | **transport/asterisk** — ARI adapter | 🟡 In Progress | 0 | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate. |
-| 10 | **Observability** — metrics, config validation, fallbacks | 🟡 Partial | 0 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown. **Missing:** fallback provider wiring, session metrics in session.rs |
+| 9 | **transport/asterisk** — ARI adapter | 🟡 In Progress | 0 | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root. |
+| 10 | **Observability** — metrics, config validation, fallbacks | ✅ Done | 2 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown, fallback provider wiring in `core::session`, session lifecycle metrics in `PipelineSession` |
 
 ---
 
@@ -68,7 +68,7 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 ### Priority 1 — Realtime WS ASR (M5)
 
 - [x] **SSE streaming ASR** — use `stream: true` on `/v1/audio/transcriptions` to emit `PartialTranscript` events
-- [ ] **Realtime WebSocket ASR** — use Speaches `/v1/realtime` for full-duplex audio streaming (lower latency)
+- [~] **Realtime WebSocket ASR** — use Speaches `/v1/realtime` for full-duplex audio streaming (lower latency) _(skipped — Speaches bug)_
 - [x] **Sentence-boundary TTS** — orchestrator extracts sentences from agent partial responses, sends each to TTS immediately
 - [x] **Barge-in interrupt** — SpeechStarted during Speaking cancels TTS and returns to Listening
 
@@ -102,15 +102,15 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 - [x] **DTMF → cancel** — `#` or `*` cancels session via CancellationToken
 - [x] **Bridge cleanup** — destroy bridge and hang up on session end or error
 - [ ] **Integration test** — `#[ignore]` test with real Asterisk
-- [ ] **Docker Compose** — `system/asterisk/compose.yaml` for local testing
+- [x] **Docker Compose** — `system/asterisk/docker-compose.yaml` for local testing
 
 ### Priority 5 — Observability + hardening (M10)
 
 - [x] Prometheus metrics — 9 metrics instrumented
 - [x] Config fail-fast — validate all required keys at startup
 - [x] Binary entry point + graceful shutdown
-- [ ] **Fallback provider wiring** — primary/fallback config in `core::session`, auto-switch on retry exhaustion
-- [ ] **Session metrics** — `session_started()`/`session_ended()` calls in `PipelineSession`
+- [x] **Fallback provider wiring** — primary/fallback config in `core::session`, auto-switch on retry exhaustion
+- [x] **Session metrics** — `session_started()`/`session_ended()` calls in `PipelineSession`
 
 ---
 
