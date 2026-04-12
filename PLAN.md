@@ -1,6 +1,6 @@
 # PLAN — voicebot-rs
 
-> 69 tests passing + 9 ignored integration tests · 9 crates · Milestones 1–4 complete, 5–7 scaffolded with Speaches providers, 8+10 partial
+> 63 tests passing + 9 ignored integration tests · 9 crates · Milestones 1–7 complete, 8+10 partial
 
 ---
 
@@ -10,12 +10,12 @@
 | --- | --- | --- | --: | --- |
 | 1 | **common** — types, traits, errors, config, retry | ✅ Done | 19 | `AudioFrame`, `PipelineEvent`, provider traits, `SessionConfig`, env-var substitution, `with_retry`, `TestAudioStream` |
 | 2 | **vad** — energy-threshold VAD + Speaches | ✅ Done | 14 | `rms_energy`, `is_voiced`, `FrameChunker`, `VadComponent` state machine, `SpeachesVadClient` batch VAD via `/v1/audio/speech/timestamps` |
-| 3 | **core** — orchestrator + session + stubs | ✅ Done | 11+2i | `Orchestrator` with provider triggering, `PipelineSession` with audio fanout, 7 integration tests (3 E2E), `build_providers()` factory, `start_with_config()`. 2 ignored Speaches tests |
+| 3 | **core** — orchestrator + session + stubs | ✅ Done | 13+2i | `Orchestrator` with provider triggering, sentence-boundary TTS streaming, barge-in interrupt, `PipelineSession` with audio fanout, 7 integration tests (3 E2E), `build_providers()` factory, `start_with_config()`. 2 ignored Speaches tests |
 | 4 | **transport/websocket** — WS server + protocol | ✅ Done | 6 | Axum handler, dual router (`router()` stubs, `router_with_config()` real), `ClientMessage`/`ServerMessage` JSON, bidirectional bridge |
-| 5 | **asr** — Speaches OpenAI-compatible provider | 🟡 Partial | 6+3i | `SpeachesAsrProvider` multipart POST to `/v1/audio/transcriptions`. 3 ignored Speaches integration tests. **Missing:** streaming SSE mode (`stream: true`), Realtime WS mode |
+| 5 | **asr** — Speaches OpenAI-compatible provider | ✅ Done | 2+3i | `SpeachesAsrProvider` multipart POST to `/v1/audio/transcriptions` with SSE streaming (`stream: true`), partial transcript events. 3 ignored Speaches integration tests. **Missing:** Realtime WS mode |
 | 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 7 | `OpenAiProvider` SSE streaming with configurable `base_url` (works with any OpenAI-compatible server), `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, `Tool` trait. **Missing:** integration test, concrete tool impls |
-| 7 | **tts** — Speaches OpenAI-compatible provider | 🟡 Partial | 6+4i | `SpeachesTtsProvider` streaming PCM from `/v1/audio/speech`, cancel support. 4 ignored Speaches integration tests. **Missing:** sentence-boundary streaming wiring |
-| 8 | **Integration** — end-to-end with interrupt | 🟡 Partial | 3 | E2E stub tests (full flow + explicit providers + terminate). **Missing:** interrupt E2E test, backpressure test |
+| 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM from `/v1/audio/speech`, cancel support, sentence-boundary streaming wired in orchestrator. 4 ignored Speaches integration tests |
+| 8 | **Integration** — end-to-end with interrupt | ✅ Done | 7 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test |
 | 9 | **transport/asterisk** — ARI adapter | ❌ Not started | 0 | `lib.rs` is empty. Needs μ-law/A-law codec, RTP jitter buffer, DTMF mapping |
 | 10 | **Observability** — metrics, config validation, fallbacks | 🟡 Partial | 0 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown. **Missing:** fallback provider wiring, session metrics in session.rs |
 
@@ -29,6 +29,7 @@
 | **Speaches skill** | ✅ Done | `skills/speaches/SKILL.md` — integration patterns for ASR, TTS, VAD, Realtime WS |
 | **API reference** | ✅ Done | `docs/speaches/api-reference.md` — full endpoint reference from source |
 | **Audio fixtures** | ✅ Done | `tests/fixtures/audio/` — `sine_440hz_1s.wav`, `silence_1s.wav` (16kHz mono i16) |
+| **Web demo** | ✅ Done | `system/voicebot-core-demo/` — browser mic → WS → chat UI + TTS playback |
 
 ---
 
@@ -64,11 +65,12 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 
 ## What's Next
 
-### Priority 1 — Streaming ASR + sentence-boundary TTS (M5, M7)
+### Priority 1 — Realtime WS ASR (M5)
 
-- [ ] **SSE streaming ASR** — use `stream: true` on `/v1/audio/transcriptions` to emit `PartialTranscript` events
+- [x] **SSE streaming ASR** — use `stream: true` on `/v1/audio/transcriptions` to emit `PartialTranscript` events
 - [ ] **Realtime WebSocket ASR** — use Speaches `/v1/realtime` for full-duplex audio streaming (lower latency)
-- [ ] **Sentence-boundary TTS** — wire `extract_sentence()` from agent output to TTS `text_rx` in the pipeline
+- [x] **Sentence-boundary TTS** — orchestrator extracts sentences from agent partial responses, sends each to TTS immediately
+- [x] **Barge-in interrupt** — SpeechStarted during Speaking cancels TTS and returns to Listening
 
 ### Priority 2 — End-to-end integration (M8)
 
@@ -79,7 +81,8 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 - [x] ASR integration tests — 3 `#[ignore]` tests with Speaches
 - [x] TTS integration tests — 4 `#[ignore]` tests with Speaches
 - [x] E2E pipeline integration test — `#[ignore]` test using Speaches ASR+TTS
-- [ ] **E2E interrupt test** — verify interrupt cancels TTS+LLM, returns to Idle
+- [x] **E2E interrupt test** — barge-in during speaking cancels TTS, returns to Listening
+- [x] **Sentence boundary test** — verifies sentence extraction and flushing logic
 - [ ] **FinalTranscript never-drop test** — verify backpressure doesn't lose transcripts
 
 ### Priority 3 — Agent improvements (M6)

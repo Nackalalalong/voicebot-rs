@@ -8,7 +8,7 @@ fn speaches_base_url() -> String {
 }
 
 fn speaches_tts_model() -> String {
-    std::env::var("SPEACHES_TTS_MODEL").unwrap_or_else(|_| "kokoro".into())
+    std::env::var("SPEACHES_TTS_MODEL").unwrap_or_else(|_| "speaches-ai/Kokoro-82M-v1.0-ONNX".into())
 }
 
 fn speaches_tts_voice() -> String {

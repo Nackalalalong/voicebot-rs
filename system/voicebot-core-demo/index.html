@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voicebot Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>Voicebot</h1>
+            <div id="status" class="status disconnected">Disconnected</div>
+        </header>
+
+        <div id="config-bar">
+            <label>
+                Server
+                <input type="text" id="ws-url" value="ws://localhost:8080/session" spellcheck="false">
+            </label>
+            <label>
+                Language
+                <select id="language">
+                    <option value="en" selected>English</option>
+                    <option value="auto">Auto</option>
+                </select>
+            </label>
+        </div>
+
+        <main id="chat">
+            <div id="messages"></div>
+        </main>
+
+        <footer>
+            <div id="controls">
+                <button id="btn-connect" title="Connect">Connect</button>
+                <button id="btn-mic" disabled title="Hold to talk">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                    <span id="mic-label">Mic Off</span>
+                </button>
+                <div id="vu-meter"><div id="vu-bar"></div></div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

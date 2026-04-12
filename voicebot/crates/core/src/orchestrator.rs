@@ -33,6 +33,10 @@ pub struct Orchestrator {
     // Active task handles for cancellation
     agent_handle: Option<JoinHandle<()>>,
     tts_handle: Option<JoinHandle<()>>,
+
+    // Sentence-boundary TTS: accumulates partial text and sends complete sentences
+    tts_text_tx: Option<Sender<String>>,
+    sentence_buffer: String,
 }
 
 impl Orchestrator {
@@ -54,6 +58,8 @@ impl Orchestrator {
             tts: None,
             agent_handle: None,
             tts_handle: None,
+            tts_text_tx: None,
+            sentence_buffer: String::new(),
         }
     }
 
@@ -78,6 +84,8 @@ impl Orchestrator {
             tts: Some(tts),
             agent_handle: None,
             tts_handle: None,
+            tts_text_tx: None,
+            sentence_buffer: String::new(),
         }
     }
 
@@ -129,8 +137,15 @@ impl Orchestrator {
                 return;
             }
 
-            // Forward agent partial responses
-            (OrchestratorState::AgentThinking, PipelineEvent::AgentPartialResponse { .. }) => {
+            // Forward agent partial responses — extract sentences for TTS
+            (OrchestratorState::AgentThinking, PipelineEvent::AgentPartialResponse { ref text, .. }) => {
+                // Start TTS on first partial if not already started
+                if self.tts_text_tx.is_none() {
+                    self.start_tts_stream();
+                }
+                // Accumulate and extract complete sentences
+                self.sentence_buffer.push_str(text);
+                self.flush_sentences().await;
                 let _ = self.egress_tx.send(event).await;
                 return;
             }
@@ -138,10 +153,18 @@ impl Orchestrator {
                 OrchestratorState::AgentThinking,
                 PipelineEvent::AgentFinalResponse { ref text, .. },
             ) => {
-                let response_text = text.clone();
+                // Start TTS if we never got partial responses (e.g. non-streaming LLM)
+                if self.tts_text_tx.is_none() {
+                    self.start_tts_stream();
+                }
+                // If the final text differs from accumulated partials, use it directly
+                if !text.is_empty() && self.sentence_buffer.is_empty() {
+                    self.sentence_buffer.push_str(text);
+                }
+                // Flush any remaining buffered text as the last sentence
+                self.flush_remaining().await;
                 self.state = OrchestratorState::Speaking;
                 let _ = self.egress_tx.send(event).await;
-                self.trigger_tts(response_text);
                 return;
             }
 
@@ -153,6 +176,15 @@ impl Orchestrator {
             (OrchestratorState::Speaking, PipelineEvent::TtsComplete) => {
                 self.state = OrchestratorState::Idle;
                 let _ = self.egress_tx.send(event).await;
+                return;
+            }
+
+            // Barge-in: user starts speaking during TTS playback → interrupt
+            (OrchestratorState::Speaking, PipelineEvent::SpeechStarted { .. }) => {
+                info!(session_id = %self.session_id, "barge-in during speaking, interrupting TTS");
+                self.cancel_active_tasks();
+                crate::observability::record_interrupt();
+                self.state = OrchestratorState::Listening;
                 return;
             }
 
@@ -224,24 +256,71 @@ impl Orchestrator {
     }
 
     /// Spawn a TTS task to synthesize the response (only if TTS provider is configured).
-    fn trigger_tts(&mut self, text: String) {
+    /// Returns a Sender for streaming sentences to TTS incrementally.
+    fn start_tts_stream(&mut self) {
         let (Some(tts), Some(event_tx)) = (self.tts.clone(), self.event_tx.clone()) else {
             return;
         };
         let session_id = self.session_id;
         let (text_tx, text_rx) = tokio::sync::mpsc::channel::<String>(20);
 
+        self.tts_text_tx = Some(text_tx);
+
         self.tts_handle = Some(tokio::spawn(async move {
-            // Send text to TTS provider, then drop sender to signal end
-            if text_tx.send(text).await.is_err() {
-                warn!(session_id = %session_id, "TTS text channel closed");
-                return;
-            }
-            drop(text_tx);
             if let Err(e) = tts.synthesize(text_rx, event_tx).await {
                 warn!(session_id = %session_id, "TTS error: {}", e);
             }
         }));
+    }
+
+    /// Extract complete sentences from the buffer and send each to TTS.
+    /// Sentence boundaries: '.', '!', '?', '\n' followed by a space or end of buffer.
+    async fn flush_sentences(&mut self) {
+        let Some(tx) = &self.tts_text_tx else { return };
+
+        loop {
+            // Find the earliest sentence-ending punctuation followed by whitespace
+            let boundary = self.sentence_buffer
+                .char_indices()
+                .zip(self.sentence_buffer.chars().skip(1))
+                .find(|((_, c), next)| {
+                    (*c == '.' || *c == '!' || *c == '?' || *c == '\n')
+                        && next.is_whitespace()
+                })
+                .map(|((i, c), _)| i + c.len_utf8());
+
+            match boundary {
+                Some(pos) => {
+                    let sentence: String = self.sentence_buffer.drain(..pos).collect();
+                    let trimmed = sentence.trim();
+                    if !trimmed.is_empty() {
+                        debug!(session_id = %self.session_id, sentence = %trimmed, "sending sentence to TTS");
+                        if tx.send(trimmed.to_string()).await.is_err() {
+                            warn!(session_id = %self.session_id, "TTS text channel closed");
+                            self.tts_text_tx = None;
+                            return;
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Flush any remaining text in the buffer (called on AgentFinalResponse).
+    async fn flush_remaining(&mut self) {
+        let trimmed = self.sentence_buffer.trim().to_string();
+        if !trimmed.is_empty() {
+            if let Some(tx) = &self.tts_text_tx {
+                debug!(session_id = %self.session_id, sentence = %trimmed, "flushing remaining text to TTS");
+                if tx.send(trimmed).await.is_err() {
+                    warn!(session_id = %self.session_id, "TTS text channel closed");
+                }
+            }
+        }
+        self.sentence_buffer.clear();
+        // Drop the sender to signal end of text to TTS
+        self.tts_text_tx = None;
     }
 
     /// Cancel any active agent or TTS tasks.
@@ -252,6 +331,8 @@ impl Orchestrator {
         if let Some(handle) = self.tts_handle.take() {
             handle.abort();
         }
+        self.tts_text_tx = None;
+        self.sentence_buffer.clear();
     }
 }
 
@@ -406,6 +487,83 @@ mod tests {
             .expect("orchestrator timed out");
 
         assert_eq!(orch.state(), OrchestratorState::Idle);
+        cancel_token.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_sentence_boundary_extraction() {
+        let (mut orch, _event_tx, _egress_rx, _cancel_token) = create_orchestrator().await;
+        let (tts_tx, mut tts_rx) = tokio::sync::mpsc::channel::<String>(20);
+        orch.tts_text_tx = Some(tts_tx);
+
+        // Simulate partial responses building up text
+        orch.sentence_buffer.push_str("Hello world. ");
+        orch.flush_sentences().await;
+
+        let sent = tts_rx.try_recv().unwrap();
+        assert_eq!(sent, "Hello world.");
+
+        // Partial that doesn't complete a sentence yet
+        orch.sentence_buffer.push_str("How are you");
+        orch.flush_sentences().await;
+        assert!(tts_rx.try_recv().is_err()); // nothing sent yet
+
+        // Complete the sentence
+        orch.sentence_buffer.push_str("? I'm fine. ");
+        orch.flush_sentences().await;
+
+        let sent1 = tts_rx.try_recv().unwrap();
+        assert_eq!(sent1, "How are you?");
+        let sent2 = tts_rx.try_recv().unwrap();
+        assert_eq!(sent2, "I'm fine.");
+
+        // Flush remaining
+        orch.sentence_buffer.push_str("Goodbye");
+        orch.flush_remaining().await;
+        let sent3 = tts_rx.try_recv().unwrap();
+        assert_eq!(sent3, "Goodbye");
+    }
+
+    #[tokio::test]
+    async fn test_barge_in_during_speaking() {
+        let (mut orch, event_tx, _egress_rx, cancel_token) = create_orchestrator().await;
+
+        // Drive to Speaking state
+        event_tx
+            .send(PipelineEvent::SpeechStarted { timestamp_ms: 0 })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::SpeechEnded { timestamp_ms: 500 })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::FinalTranscript {
+                text: "hello".into(),
+                language: "en".into(),
+            })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::AgentFinalResponse {
+                text: "long response here".into(),
+                tool_calls: vec![],
+            })
+            .await
+            .expect("send failed");
+        // User barges in while TTS is playing
+        event_tx
+            .send(PipelineEvent::SpeechStarted { timestamp_ms: 1000 })
+            .await
+            .expect("send failed");
+        drop(event_tx);
+
+        timeout(Duration::from_secs(2), orch.run())
+            .await
+            .expect("orchestrator timed out");
+
+        // Barge-in should leave us in Listening (ready for new speech)
+        assert_eq!(orch.state(), OrchestratorState::Listening);
         cancel_token.cancel();
     }
 }

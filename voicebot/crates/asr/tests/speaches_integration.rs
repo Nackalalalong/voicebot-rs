@@ -73,7 +73,7 @@ fn speaches_base_url() -> String {
 
 fn speaches_asr_model() -> String {
     std::env::var("SPEACHES_ASR_MODEL")
-        .unwrap_or_else(|_| "Systran/faster-whisper-small".into())
+        .unwrap_or_else(|_| "Systran/faster-distil-whisper-large-v3".into())
 }
 
 #[tokio::test]
@@ -102,6 +102,9 @@ async fn test_speaches_asr_transcribes_audio() {
         tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
     {
         match event {
+            PipelineEvent::PartialTranscript { text, .. } => {
+                println!("ASR partial: {text:?}");
+            }
             PipelineEvent::FinalTranscript { text, .. } => {
                 println!("ASR transcribed: {text:?}");
                 got_event = true;

@@ -37,7 +37,7 @@ fn test_app_config() -> AppConfig {
             speaches: Some(SpeachesAsrConfig {
                 base_url: base_url.clone(),
                 api_key: None,
-                model: "Systran/faster-whisper-small".into(),
+                model: "Systran/faster-distil-whisper-large-v3".into(),
                 language: Some("en".into()),
             }),
         },
@@ -58,7 +58,7 @@ fn test_app_config() -> AppConfig {
             speaches: Some(SpeachesTtsConfig {
                 base_url,
                 api_key: None,
-                model: "kokoro".into(),
+                model: "speaches-ai/Kokoro-82M-v1.0-ONNX".into(),
                 voice: "af_heart".into(),
             }),
         },
