@@ -6,20 +6,23 @@ Captures microphone audio, sends it over WebSocket, and displays the conversatio
 ## Quick Start
 
 1. **Start the voicebot server:**
-   ```bash
-   cd voicebot && cargo run -p voicebot-server
-   ```
+
+    ```bash
+    cd voicebot && cargo run -p voicebot-server
+    ```
 
 2. **Start the Speaches backend** (if not already running):
-   ```bash
-   cd system/speaches && docker compose -f compose.cpu.yaml up -d
-   ```
+
+    ```bash
+    cd system/speaches && docker compose -f compose.cpu.yaml up -d
+    ```
 
 3. **Serve this directory** (any static file server works):
-   ```bash
-   cd system/voicebot-core-demo
-   python3 -m http.server 3000
-   ```
+
+    ```bash
+    cd system/voicebot-core-demo
+    python3 -m http.server 3000
+    ```
 
 4. **Open** http://localhost:3000 in your browser.
 
@@ -38,11 +41,13 @@ Chat UI ← JSON text frames ← Transcripts + Agent responses
 ### WebSocket Protocol
 
 **Client → Server:**
+
 - `{"type":"session_start","language":"en","asr":"speaches","tts":"speaches"}` — start session
 - Binary frames: raw PCM i16 LE, 16kHz mono, 320 samples (640 bytes) per frame
 - `{"type":"session_end"}` — end session
 
 **Server → Client:**
+
 - `{"type":"transcript_partial","text":"..."}` — partial ASR result
 - `{"type":"transcript_final","text":"..."}` — final ASR result
 - `{"type":"agent_partial","text":"..."}` — streaming agent response

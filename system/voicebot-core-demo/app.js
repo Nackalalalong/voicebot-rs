@@ -66,7 +66,10 @@ function updateMessageText(msgEl, text, isPartial) {
 
 // --- WebSocket ---
 function connect() {
-    if (ws) { disconnect(); return; }
+    if (ws) {
+        disconnect();
+        return;
+    }
 
     const url = wsUrlInput.value.trim();
     if (!url) return;
@@ -83,12 +86,14 @@ function connect() {
         addSystemMessage('Connected to server');
 
         // Send session_start
-        ws.send(JSON.stringify({
-            type: 'session_start',
-            language: languageSelect.value,
-            asr: 'speaches',
-            tts: 'speaches',
-        }));
+        ws.send(
+            JSON.stringify({
+                type: 'session_start',
+                language: languageSelect.value,
+                asr: 'speaches',
+                tts: 'speaches',
+            }),
+        );
     };
 
     ws.onmessage = (event) => {
@@ -115,7 +120,7 @@ function connect() {
 
 function disconnect() {
     if (ws) {
-        ws.send(JSON.stringify({ type: 'session_end' }));
+        ws.send(JSON.stringify({type: 'session_end'}));
         ws.close();
     }
 }
@@ -176,7 +181,7 @@ function handleServerAudio(arrayBuffer) {
 
 async function drainPlaybackQueue() {
     if (!audioCtx) {
-        audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+        audioCtx = new AudioContext({sampleRate: SAMPLE_RATE});
     }
     isPlaying = true;
 
@@ -219,7 +224,7 @@ async function startMic() {
                 echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: true,
-            }
+            },
         });
     } catch (e) {
         addSystemMessage('Microphone access denied');
@@ -227,7 +232,7 @@ async function startMic() {
     }
 
     if (!audioCtx) {
-        audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+        audioCtx = new AudioContext({sampleRate: SAMPLE_RATE});
     }
 
     // Resample if browser context rate differs from 16kHz
@@ -299,7 +304,7 @@ function stopMic() {
         processor = null;
     }
     if (micStream) {
-        micStream.getTracks().forEach(t => t.stop());
+        micStream.getTracks().forEach((t) => t.stop());
         micStream = null;
     }
     micActive = false;
@@ -322,7 +327,12 @@ btnMic.addEventListener('click', toggleMic);
 
 // Keyboard shortcut: Space to toggle mic
 document.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && !e.repeat && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'SELECT') {
+    if (
+        e.code === 'Space' &&
+        !e.repeat &&
+        document.activeElement.tagName !== 'INPUT' &&
+        document.activeElement.tagName !== 'SELECT'
+    ) {
         e.preventDefault();
         if (ws && ws.readyState === WebSocket.OPEN) toggleMic();
     }

@@ -62,10 +62,7 @@ impl SpeachesAsrProvider {
     }
 
     /// Send the request and handle HTTP-level errors.
-    async fn send_request(
-        &self,
-        form: multipart::Form,
-    ) -> Result<reqwest::Response, AsrError> {
+    async fn send_request(&self, form: multipart::Form) -> Result<reqwest::Response, AsrError> {
         let mut req = self
             .client
             .post(format!("{}/v1/audio/transcriptions", self.base_url))
@@ -128,9 +125,8 @@ impl AsrProvider for SpeachesAsrProvider {
         let mut buffer = String::new();
 
         while let Some(chunk) = byte_stream.next().await {
-            let bytes = chunk.map_err(|e| {
-                AsrError::InvalidResponse(format!("SSE stream read error: {e}"))
-            })?;
+            let bytes = chunk
+                .map_err(|e| AsrError::InvalidResponse(format!("SSE stream read error: {e}")))?;
             buffer.push_str(&String::from_utf8_lossy(&bytes));
 
             // Process complete SSE lines

@@ -8,7 +8,8 @@ fn speaches_base_url() -> String {
 }
 
 fn speaches_tts_model() -> String {
-    std::env::var("SPEACHES_TTS_MODEL").unwrap_or_else(|_| "speaches-ai/Kokoro-82M-v1.0-ONNX".into())
+    std::env::var("SPEACHES_TTS_MODEL")
+        .unwrap_or_else(|_| "speaches-ai/Kokoro-82M-v1.0-ONNX".into())
 }
 
 fn speaches_tts_voice() -> String {
@@ -140,7 +141,10 @@ async fn test_speaches_tts_empty_text_skipped() {
         }
     }
 
-    assert!(audio_chunks > 0, "should still produce audio for non-empty text");
+    assert!(
+        audio_chunks > 0,
+        "should still produce audio for non-empty text"
+    );
 }
 
 #[tokio::test]

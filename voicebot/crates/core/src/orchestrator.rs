@@ -138,7 +138,10 @@ impl Orchestrator {
             }
 
             // Forward agent partial responses — extract sentences for TTS
-            (OrchestratorState::AgentThinking, PipelineEvent::AgentPartialResponse { ref text, .. }) => {
+            (
+                OrchestratorState::AgentThinking,
+                PipelineEvent::AgentPartialResponse { ref text, .. },
+            ) => {
                 // Start TTS on first partial if not already started
                 if self.tts_text_tx.is_none() {
                     self.start_tts_stream();
@@ -280,12 +283,12 @@ impl Orchestrator {
 
         loop {
             // Find the earliest sentence-ending punctuation followed by whitespace
-            let boundary = self.sentence_buffer
+            let boundary = self
+                .sentence_buffer
                 .char_indices()
                 .zip(self.sentence_buffer.chars().skip(1))
                 .find(|((_, c), next)| {
-                    (*c == '.' || *c == '!' || *c == '?' || *c == '\n')
-                        && next.is_whitespace()
+                    (*c == '.' || *c == '!' || *c == '?' || *c == '\n') && next.is_whitespace()
                 })
                 .map(|((i, c), _)| i + c.len_utf8());
 

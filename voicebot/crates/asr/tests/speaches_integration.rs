@@ -79,11 +79,9 @@ fn speaches_asr_model() -> String {
 #[tokio::test]
 #[ignore = "requires running Speaches server"]
 async fn test_speaches_asr_transcribes_audio() {
-    let provider = asr::speaches::SpeachesAsrProvider::new(
-        speaches_base_url(),
-        speaches_asr_model(),
-    )
-    .with_language("en".into());
+    let provider =
+        asr::speaches::SpeachesAsrProvider::new(speaches_base_url(), speaches_asr_model())
+            .with_language("en".into());
 
     let (tx, mut rx) = mpsc::channel::<PipelineEvent>(10);
 
@@ -98,9 +96,7 @@ async fn test_speaches_asr_transcribes_audio() {
 
     // Drain events — we may or may not get a transcript for a sine wave
     let mut got_event = false;
-    while let Ok(Some(event)) =
-        tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
-    {
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
         match event {
             PipelineEvent::PartialTranscript { text, .. } => {
                 println!("ASR partial: {text:?}");
@@ -119,11 +115,9 @@ async fn test_speaches_asr_transcribes_audio() {
 #[tokio::test]
 #[ignore = "requires running Speaches server"]
 async fn test_speaches_asr_handles_silence() {
-    let provider = asr::speaches::SpeachesAsrProvider::new(
-        speaches_base_url(),
-        speaches_asr_model(),
-    )
-    .with_language("en".into());
+    let provider =
+        asr::speaches::SpeachesAsrProvider::new(speaches_base_url(), speaches_asr_model())
+            .with_language("en".into());
 
     let (tx, mut rx) = mpsc::channel::<PipelineEvent>(10);
 
@@ -150,11 +144,9 @@ async fn test_speaches_asr_handles_silence() {
 #[tokio::test]
 #[ignore = "requires running Speaches server"]
 async fn test_speaches_asr_synthetic_speech() {
-    let provider = asr::speaches::SpeachesAsrProvider::new(
-        speaches_base_url(),
-        speaches_asr_model(),
-    )
-    .with_language("en".into());
+    let provider =
+        asr::speaches::SpeachesAsrProvider::new(speaches_base_url(), speaches_asr_model())
+            .with_language("en".into());
 
     let (tx, mut rx) = mpsc::channel::<PipelineEvent>(10);
 
@@ -167,9 +159,7 @@ async fn test_speaches_asr_synthetic_speech() {
         .expect("ASR stream should succeed");
 
     // Collect all events
-    while let Ok(Some(event)) =
-        tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
-    {
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
         if let PipelineEvent::FinalTranscript { text, language } = event {
             println!("Transcript: {text:?} (lang={language})");
         }
