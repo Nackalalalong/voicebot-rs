@@ -1,0 +1,50 @@
+# Voicebot Core Demo — Docker Compose
+# Usage:  docker compose up --build
+#         OPENAI_API_KEY=sk-xxx docker compose up --build
+#
+# Services:
+#   speaches  — ASR / TTS / LLM (OpenAI-compatible)  :8000
+#   voicebot  — WebSocket voice pipeline              :8080
+#   web       — Static demo UI served by nginx        :3000
+
+services:
+    # ── Speaches (ASR + TTS + OpenAI-compatible chat) ─────────────────────────
+    speaches:
+        extends:
+            file: ../../system/speaches/compose.cpu.yaml
+            service: speaches
+        restart: unless-stopped
+        healthcheck:
+            test: ['CMD', 'curl', '--fail', 'http://localhost:8000/health']
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            start_period: 10s
+
+    # ── Voicebot server ────────────────────────────────────────────────────────
+    voicebot:
+        build:
+            context: ../../voicebot
+            dockerfile: Dockerfile
+        restart: unless-stopped
+        ports:
+            - '${VOICEBOT_PORT:-8080}:8080'
+        volumes:
+            - ./config.docker.toml:/etc/voicebot/config.toml:ro
+        environment:
+            - OPENAI_API_KEY=${OPENAI_API_KEY:-none}
+            - RUST_LOG=${RUST_LOG:-info,voicebot_core=debug,asr=debug,tts=debug,agent=debug}
+        depends_on:
+            speaches:
+                condition: service_healthy
+
+    # ── Web demo (static files via nginx) ─────────────────────────────────────
+    web:
+        image: nginx:alpine
+        restart: unless-stopped
+        ports:
+            - '${WEB_PORT:-3000}:80'
+        volumes:
+            - .:/usr/share/nginx/html:ro
+        depends_on:
+            - voicebot

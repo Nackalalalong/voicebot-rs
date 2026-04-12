@@ -1,0 +1,41 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[session_defaults]
+language = "auto"
+asr_provider = "speaches"
+tts_provider = "speaches"
+llm_provider = "openai"
+
+[vad]
+silence_ms = 800
+min_speech_ms = 200
+energy_threshold = 0.02
+
+[asr]
+primary = "speaches"
+
+[llm]
+primary = "openai"
+
+[llm.openai]
+base_url = "http://speaches:8000"
+api_key = "${OPENAI_API_KEY}"
+model = "gpt-4o"
+max_tokens = 512
+temperature = 0.7
+
+[asr.speaches]
+base_url = "http://speaches:8000"
+model = "Systran/faster-whisper-tiny"
+language = "en"
+
+[tts.speaches]
+base_url = "http://speaches:8000"
+model = "speaches-ai/Kokoro-82M-v1.0-ONNX"
+voice = "af_heart"
+
+[channels]
+audio_ingress_capacity = 50
+event_bus_capacity = 200
