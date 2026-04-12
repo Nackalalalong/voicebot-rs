@@ -407,11 +407,11 @@ base_url = "http://localhost:8000"  # required
 api_key = "${SPEACHES_API_KEY}"     # optional, env var substitution
 
 [speaches.asr]
-model = "Systran/faster-whisper-large-v3"
+model = "Systran/faster-distil-whisper-large-v3"
 language = "en"                     # optional, auto-detect if omitted
 
 [speaches.tts]
-model = "kokoro"
+model = "speaches-ai/Kokoro-82M-v1.0-ONNX"
 voice = "af_heart"
 
 [speaches.realtime]

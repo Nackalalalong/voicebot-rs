@@ -41,13 +41,13 @@ model_path = "./models/tts_model.pth"
 [asr.speaches]
 base_url = "http://localhost:8000"
 # api_key = "${SPEACHES_API_KEY}"
-model = "Systran/faster-whisper-large-v3"
-language = "th"
+model = "Systran/faster-distil-whisper-large-v3"
+language = "en"
 
 [tts.speaches]
 base_url = "http://localhost:8000"
 # api_key = "${SPEACHES_API_KEY}"
-model = "kokoro"
+model = "speaches-ai/Kokoro-82M-v1.0-ONNX"
 voice = "af_heart"
 
 [channels]

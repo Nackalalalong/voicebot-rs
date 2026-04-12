@@ -152,13 +152,13 @@ mod tests {
     fn test_provider_builder() {
         let provider = SpeachesTtsProvider::new(
             "http://localhost:8000".into(),
-            "kokoro".into(),
+            "speaches-ai/Kokoro-82M-v1.0-ONNX".into(),
             "af_heart".into(),
         )
         .with_api_key("test-key".into());
 
         assert_eq!(provider.base_url, "http://localhost:8000");
-        assert_eq!(provider.model, "kokoro");
+        assert_eq!(provider.model, "speaches-ai/Kokoro-82M-v1.0-ONNX");
         assert_eq!(provider.voice, "af_heart");
         assert_eq!(provider.api_key.as_deref(), Some("test-key"));
     }
@@ -167,7 +167,7 @@ mod tests {
     fn test_cancel_flag() {
         let provider = SpeachesTtsProvider::new(
             "http://localhost:8000".into(),
-            "kokoro".into(),
+            "speaches-ai/Kokoro-82M-v1.0-ONNX".into(),
             "af_heart".into(),
         );
         assert!(!provider.cancelled.load(Ordering::Relaxed));

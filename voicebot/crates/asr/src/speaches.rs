@@ -131,13 +131,13 @@ mod tests {
     fn test_provider_builder() {
         let provider = SpeachesAsrProvider::new(
             "http://localhost:8000".into(),
-            "Systran/faster-whisper-large-v3".into(),
+            "Systran/faster-distil-whisper-large-v3".into(),
         )
         .with_api_key("test-key".into())
         .with_language("en".into());
 
         assert_eq!(provider.base_url, "http://localhost:8000");
-        assert_eq!(provider.model, "Systran/faster-whisper-large-v3");
+        assert_eq!(provider.model, "Systran/faster-distil-whisper-large-v3");
         assert_eq!(provider.api_key.as_deref(), Some("test-key"));
         assert_eq!(provider.language.as_deref(), Some("en"));
     }

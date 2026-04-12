@@ -15,7 +15,7 @@ Transcribe audio to text. Supports streaming via SSE.
 | Field | Type | Required | Default | Notes |
 | --- | --- | --- | --- | --- |
 | `file` | file upload | yes | — | Audio file |
-| `model` | string | yes | — | e.g. `Systran/faster-whisper-large-v3` |
+| `model` | string | yes | — | e.g. `Systran/faster-distil-whisper-large-v3` |
 | `language` | string | no | `null` | BCP-47 language code |
 | `prompt` | string | no | `null` | Context/prompt for the model |
 | `response_format` | string | no | `"json"` | `text`, `json`, `verbose_json`, `srt`, `vtt` |
@@ -54,7 +54,7 @@ Translate audio speech to English text.
 | Field             | Type        | Required | Default  | Notes                                  |
 | ----------------- | ----------- | -------- | -------- | -------------------------------------- |
 | `file`            | file upload | yes      | —        | Audio file                             |
-| `model`           | string      | yes      | —        | e.g. `Systran/faster-whisper-large-v3` |
+| `model`           | string      | yes      | —        | e.g. `Systran/faster-distil-whisper-large-v3` |
 | `prompt`          | string      | no       | `null`   |                                        |
 | `response_format` | string      | no       | `"json"` | `text`, `json`, `verbose_json`         |
 | `temperature`     | float       | no       | `0.0`    |                                        |
@@ -77,7 +77,7 @@ Generate audio from text. Streams output.
 
 ```json
 {
-    "model": "kokoro",
+    "model": "speaches-ai/Kokoro-82M-v1.0-ONNX",
     "input": "Hello world",
     "voice": "af_heart",
     "response_format": "mp3",
@@ -121,8 +121,8 @@ OpenAI-compatible chat completions. Supports audio input/output modalities.
     "modalities": ["text", "audio"],
     "audio": {"format": "pcm16", "voice": "af_heart"},
     "stream": true,
-    "transcription_model": "Systran/faster-whisper-large-v3",
-    "speech_model": "kokoro",
+    "transcription_model": "Systran/faster-distil-whisper-large-v3",
+    "speech_model": "speaches-ai/Kokoro-82M-v1.0-ONNX",
     "speech_extra_body": {"sample_rate": 24000}
 }
 ```
@@ -167,7 +167,7 @@ List all locally loaded models.
     "object": "list",
     "data": [
         {
-            "id": "Systran/faster-whisper-large-v3",
+            "id": "Systran/faster-distil-whisper-large-v3",
             "object": "model",
             "created": 1700000000,
             "owned_by": "Systran",
@@ -189,7 +189,7 @@ List available voices from loaded TTS models.
 ```json
 {
     "object": "list",
-    "voices": [{"name": "af_heart", "model": "kokoro", "language": "en"}]
+    "voices": [{"name": "af_heart", "model": "speaches-ai/Kokoro-82M-v1.0-ONNX", "language": "en"}]
 }
 ```
 
@@ -384,7 +384,7 @@ Health check. No authentication required.
 _Experimental._ List currently loaded/running models.
 
 ```json
-{"models": ["Systran/faster-whisper-large-v3", "kokoro"]}
+{"models": ["Systran/faster-distil-whisper-large-v3", "speaches-ai/Kokoro-82M-v1.0-ONNX"]}
 ```
 
 ### POST `/api/ps/{model_id}`
