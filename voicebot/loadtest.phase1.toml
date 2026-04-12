@@ -18,7 +18,7 @@ settle_before_playback_ms = 500
 record_after_playback_ms = 3000
 
 [media]
-input_wav = "crates/loadtest/fixtures/tone_1s_16k.wav"
+input_wav = "tests/fixtures/audio/sample_speech.wav"
 artifact_dir = "artifacts/loadtest"
 
 [analysis]

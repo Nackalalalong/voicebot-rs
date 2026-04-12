@@ -1,14 +1,13 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use common::audio::AudioFrame;
 use common::config::{AppConfig, AsteriskConfig};
 use common::events::{PipelineEvent, SessionConfig};
 use common::types::{AsrProviderType, Language, LlmProviderType, TtsProviderType};
 use futures::StreamExt;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -16,11 +15,12 @@ use uuid::Uuid;
 use voicebot_core::session::PipelineSession;
 
 use crate::ari_client::AriRestClient;
-use crate::audiosocket::{
-    frame_to_pcm_bytes, pcm_bytes_to_frame, read_packet, write_audio_packet, write_hangup_packet,
-};
 use crate::error::AriError;
 use crate::events::AriChannel;
+use crate::rtp::{build_pcmu_packet, parse_rtp_payload, pcmu_payload_to_frame};
+
+const RTP_FRAME_16K_SAMPLES: usize = 320;
+const RTP_TIMESTAMP_STEP: u32 = 160;
 
 // ---------------------------------------------------------------------------
 // Call registry — maps caller channel-id → per-session cancel token.
@@ -115,6 +115,10 @@ impl AriTransport {
             match event.kind.as_str() {
                 "StasisStart" => {
                     if let Some(channel) = event.channel {
+                        if channel.name.starts_with("UnicastRTP/") {
+                            info!(channel_id = %channel.id, channel_name = %channel.name, "ignoring transport-owned RTP channel");
+                            continue;
+                        }
                         let channel_id = channel.id.clone();
                         let session_cancel = CancellationToken::new();
                         registry
@@ -186,41 +190,29 @@ async fn handle_stasis_start(
     // 1. Answer the channel.
     rest.answer_channel(channel_id).await?;
 
-    // 2. Bind an ephemeral TCP port for AudioSocket.
-    //    Each call gets its own port — avoids UUID correlation complexity.
-    let tcp_listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let audio_port = tcp_listener.local_addr()?.port();
+    // 2. Bind an ephemeral UDP port for RTP external media.
+    let udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let audio_port = udp_socket.local_addr()?.port();
     let external_host = format!("{}:{}", config.audio_host, audio_port);
-    info!(%channel_id, %external_host, "AudioSocket listener bound");
+    info!(%channel_id, %external_host, "RTP socket bound");
 
-    // 3. Tell Asterisk to connect its audio to our TCP port.
-    let ext_chan_id = rest
-        .create_external_media(&config.app_name, &external_host, "slin16")
+    // 3. Tell Asterisk to connect its audio to our UDP port.
+    let ext_media = rest
+        .create_external_media(&config.app_name, &external_host, "ulaw")
         .await?;
 
     // 4. Create a mixing bridge and add both channels.
     let bridge_id = rest
         .create_bridge(&format!("voicebot-{}", session_id))
         .await?;
-    rest.add_to_bridge(&bridge_id, &[channel_id, &ext_chan_id])
+    rest.add_to_bridge(&bridge_id, &[channel_id, &ext_media.id])
         .await?;
 
-    // 5. Accept the AudioSocket TCP connection (Asterisk connects to us, 10s window).
-    let tcp_stream = tokio::select! {
-        result = accept_tcp(&tcp_listener) => result?,
-        _ = cancel.cancelled() => {
-            cleanup(&rest, &bridge_id, channel_id).await;
-            return Ok(());
-        }
-    };
-    drop(tcp_listener); // no more connections expected for this call
-    info!(%channel_id, %session_id, "AudioSocket connection accepted");
-
-    // 6. Create pipeline I/O channels.
+    // 5. Create pipeline I/O channels.
     let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    // 7. Build session config from app-level defaults.
+    // 6. Build session config from app-level defaults.
     let defaults = &app_config.session_defaults;
     let session_config = SessionConfig {
         session_id,
@@ -232,7 +224,7 @@ async fn handle_stasis_start(
         system_prompt: None,
     };
 
-    // 8. Start the pipeline session.
+    // 7. Start the pipeline session.
     let mut session =
         match PipelineSession::start_with_config(&app_config, session_config, audio_rx, egress_tx)
             .await
@@ -245,18 +237,19 @@ async fn handle_stasis_start(
             }
         };
 
-    // 9. Bridge AudioSocket ↔ pipeline until hangup, cancel, or SessionEnd.
+    // 8. Bridge RTP ↔ pipeline until hangup, cancel, or SessionEnd.
     run_bridge(
         session_id,
         channel_id,
-        tcp_stream,
+        udp_socket,
+        ext_media.remote_addr,
         audio_tx,
         egress_rx,
         cancel.clone(),
     )
     .await;
 
-    // 10. Tear down.
+    // 9. Tear down.
     session.terminate().await;
     cleanup(&rest, &bridge_id, channel_id).await;
 
@@ -268,60 +261,59 @@ async fn handle_stasis_start(
 // AudioSocket bridge loop
 // ---------------------------------------------------------------------------
 
-/// Bidirectional bridge between the AudioSocket TCP stream and pipeline channels.
+/// Bidirectional bridge between RTP packets and pipeline channels.
 ///
-/// Inbound  (Asterisk → us):  0x10 audio packets → `audio_tx` as `AudioFrame`.
-/// Outbound (us → Asterisk): `TtsAudioChunk` events → 0x10 audio packets.
+/// Inbound  (Asterisk → us): RTP/PCMU packets → `audio_tx` as 16 kHz `AudioFrame`.
+/// Outbound (us → Asterisk): `TtsAudioChunk` events → RTP/PCMU packets.
 ///
-/// Exits on: 0x00 hangup packet, `cancel` fired, `SessionEnd` event, or I/O error.
+/// Exits on: `cancel` fired, `SessionEnd` event, or I/O error.
 async fn run_bridge(
     session_id: Uuid,
     channel_id: &str,
-    tcp_stream: TcpStream,
+    udp_socket: UdpSocket,
+    remote_addr: SocketAddr,
     audio_tx: mpsc::Sender<AudioFrame>,
     mut egress_rx: mpsc::Receiver<PipelineEvent>,
     cancel: CancellationToken,
 ) {
-    let (mut read_half, mut write_half) = tokio::io::split(tcp_stream);
     let mut frame_ts_ms: u64 = 0;
+    let seed = Uuid::new_v4();
+    let seed_bytes = seed.as_bytes();
+    let mut sequence = u16::from_be_bytes([seed_bytes[0], seed_bytes[1]]);
+    let mut timestamp = u32::from_be_bytes([seed_bytes[2], seed_bytes[3], seed_bytes[4], seed_bytes[5]]);
+    let ssrc = u32::from_be_bytes([seed_bytes[6], seed_bytes[7], seed_bytes[8], seed_bytes[9]]);
+    let mut packet_buffer = [0u8; 2048];
+    let mut active_remote_addr = remote_addr;
 
     loop {
         tokio::select! {
             biased;
 
             _ = cancel.cancelled() => {
-                let _ = write_hangup_packet(&mut write_half).await;
                 break;
             }
 
-            // Read from Asterisk via AudioSocket.
-            packet = read_packet(&mut read_half) => {
-                match packet {
-                    Ok(pkt) => match pkt.kind {
-                        0x00 => {
-                            // Asterisk sent hangup.
-                            info!(%channel_id, "AudioSocket hangup received");
-                            cancel.cancel();
-                            break;
+            recv_result = udp_socket.recv_from(&mut packet_buffer) => {
+                match recv_result {
+                    Ok((received, source_addr)) => {
+                        if source_addr != active_remote_addr {
+                            info!(%channel_id, expected_peer = %active_remote_addr, actual_peer = %source_addr, "learning RTP peer address from live traffic");
+                            active_remote_addr = source_addr;
                         }
-                        0x01 => {
-                            let uuid = String::from_utf8_lossy(&pkt.payload);
-                            info!(%channel_id, audiosocket_uuid = %uuid, "AudioSocket UUID");
+                        let Some(payload) = parse_rtp_payload(&packet_buffer[..received]) else {
+                            continue;
+                        };
+                        if payload.is_empty() {
+                            continue;
                         }
-                        0x10 if !pkt.payload.is_empty() => {
-                            // slin16 audio frame → pipeline.
-                            let samples = pkt.payload.len() / 2;
-                            let frame = pcm_bytes_to_frame(&pkt.payload, frame_ts_ms);
-                            // Advance timestamp by the number of samples at 16kHz → ms.
-                            frame_ts_ms += (samples as u64 * 1000) / 16000;
-                            if audio_tx.try_send(frame).is_err() {
-                                warn!(%session_id, "audio ingress channel full — dropping frame");
-                            }
+                        let frame = pcmu_payload_to_frame(payload, frame_ts_ms);
+                        frame_ts_ms += frame.duration_ms();
+                        if audio_tx.try_send(frame).is_err() {
+                            warn!(%session_id, "audio ingress channel full — dropping frame");
                         }
-                        _ => {} // ignore empty audio or unknown kinds
-                    },
+                    }
                     Err(e) => {
-                        warn!(%channel_id, "AudioSocket read error: {}", e);
+                        warn!(%channel_id, "RTP read error: {}", e);
                         cancel.cancel();
                         break;
                     }
@@ -332,14 +324,15 @@ async fn run_bridge(
             event = egress_rx.recv() => {
                 match event {
                     Some(PipelineEvent::TtsAudioChunk { frame, .. }) => {
-                        let bytes = frame_to_pcm_bytes(&frame);
-                        // Split to 320-byte chunks = 10ms @ 16kHz.
-                        for chunk in bytes.chunks(320) {
-                            if write_audio_packet(&mut write_half, chunk).await.is_err() {
-                                warn!(%channel_id, "AudioSocket write error");
+                        for chunk in frame.data.chunks(RTP_FRAME_16K_SAMPLES) {
+                            let packet = build_pcmu_packet(chunk, sequence, timestamp, ssrc);
+                            if udp_socket.send_to(&packet, active_remote_addr).await.is_err() {
+                                warn!(%channel_id, "RTP write error");
                                 cancel.cancel();
                                 break;
                             }
+                            sequence = sequence.wrapping_add(1);
+                            timestamp = timestamp.wrapping_add(RTP_TIMESTAMP_STEP);
                         }
                     }
                     Some(PipelineEvent::SessionEnd { .. }) | None => {
@@ -351,22 +344,11 @@ async fn run_bridge(
             }
         }
     }
-
-    // Flush the write half before dropping.
-    let _ = write_half.flush().await;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async fn accept_tcp(listener: &tokio::net::TcpListener) -> Result<TcpStream, AriError> {
-    let (stream, addr) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
-        .await
-        .map_err(|_| AriError::Timeout)??;
-    info!(peer = %addr, "AudioSocket TCP connection from Asterisk");
-    Ok(stream)
-}
 
 async fn cleanup(rest: &AriRestClient, bridge_id: &str, channel_id: &str) {
     if let Err(e) = rest.destroy_bridge(bridge_id).await {

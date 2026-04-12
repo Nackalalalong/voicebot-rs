@@ -2294,6 +2294,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "common",
+ "futures",
  "hound",
  "regex",
  "reqwest",
@@ -2302,6 +2303,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite 0.26.2",
  "toml",
  "tracing",
  "tracing-subscriber",

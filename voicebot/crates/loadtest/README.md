@@ -29,9 +29,12 @@ cargo run -p voicebot-loadtest -- loadtest.phase1.toml
 The sample config uses:
 
 - Asterisk ARI on `localhost:8088`
+- a dedicated loadtest controller app `voicebot-loadtest` for the controllable Local channel leg
 - external-media callback host `172.17.0.1`
 - the local Asterisk dial target `Local/1000@dp_entry_call_in`
-- fixture WAV `crates/loadtest/fixtures/tone_1s_16k.wav`
+- speech fixture `tests/fixtures/audio/sample_speech.wav`
+
+Phase 1 currently uses ARI `externalMedia` in the supported RTP/UDP mode. The loadtest backend controls the Local channel leg in its own Stasis app, while the far leg reaches `Stasis(voicebot)` through the existing dialplan.
 
 Artifacts are written under `artifacts/loadtest/<run_id>/`.
 

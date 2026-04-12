@@ -1,7 +1,15 @@
+use std::net::SocketAddr;
+
 use common::config::AsteriskConfig;
 use reqwest::Client;
 
 use crate::error::AriError;
+
+#[derive(Clone, Debug)]
+pub struct ExternalMediaChannel {
+    pub id: String,
+    pub remote_addr: SocketAddr,
+}
 
 /// Thin async wrapper around the Asterisk REST Interface.
 ///
@@ -117,15 +125,15 @@ impl AriRestClient {
         Ok(())
     }
 
-    /// POST /channels/externalMedia — create an AudioSocket channel.
+    /// POST /channels/externalMedia — create an RTP external-media channel.
     ///
-    /// Returns the new external-media channel ID.
+    /// Returns the new external-media channel plus the address Asterisk expects RTP to be sent to.
     pub async fn create_external_media(
         &self,
         app_name: &str,
         external_host: &str,
         format: &str,
-    ) -> Result<String, AriError> {
+    ) -> Result<ExternalMediaChannel, AriError> {
         let url = format!("{}/channels/externalMedia", self.base_url);
         let resp = self
             .client
@@ -134,10 +142,7 @@ impl AriRestClient {
             .query(&[
                 ("app", app_name),
                 ("external_host", external_host),
-                ("transport", "tcp"),
-                ("encapsulation", "audiosocket"),
                 ("format", format),
-                ("direction", "both"),
             ])
             .send()
             .await?;
@@ -148,10 +153,39 @@ impl AriRestClient {
             });
         }
         let body: serde_json::Value = resp.json().await?;
-        body["id"]
+        let id = body["id"]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| AriError::Protocol("externalMedia response missing 'id'".into()))
+            .ok_or_else(|| AriError::Protocol("externalMedia response missing 'id'".into()))?;
+        let channelvars = body["channelvars"]
+            .as_object()
+            .ok_or_else(|| AriError::Protocol("externalMedia response missing 'channelvars'".into()))?;
+        let local_address = channelvars
+            .get("UNICASTRTP_LOCAL_ADDRESS")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                AriError::Protocol(
+                    "externalMedia response missing UNICASTRTP_LOCAL_ADDRESS".into(),
+                )
+            })?;
+        let local_port = channelvars
+            .get("UNICASTRTP_LOCAL_PORT")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                AriError::Protocol(
+                    "externalMedia response missing UNICASTRTP_LOCAL_PORT".into(),
+                )
+            })?;
+        let remote_addr = format!("{}:{}", local_address, local_port)
+            .parse()
+            .map_err(|error| {
+                AriError::Protocol(format!(
+                    "invalid externalMedia RTP address {}:{}: {}",
+                    local_address, local_port, error
+                ))
+            })?;
+
+        Ok(ExternalMediaChannel { id, remote_addr })
     }
 
     /// POST /bridges?type=mixing — create a mixing bridge.

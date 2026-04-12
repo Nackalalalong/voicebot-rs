@@ -108,6 +108,7 @@ impl LoadtestConfig {
         if asterisk.ari_host.trim().is_empty()
             || asterisk.username.trim().is_empty()
             || asterisk.password.trim().is_empty()
+            || asterisk.app_name.trim().is_empty()
             || asterisk.audio_host.trim().is_empty()
         {
             return Err(LoadtestError::InvalidConfig(
