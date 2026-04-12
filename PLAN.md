@@ -29,7 +29,7 @@
 | **Speaches skill** | ✅ Done | `skills/speaches/SKILL.md` — integration patterns for ASR, TTS, VAD, Realtime WS |
 | **API reference** | ✅ Done | `docs/speaches/api-reference.md` — full endpoint reference from source |
 | **Audio fixtures** | ✅ Done | `tests/fixtures/audio/` — `sine_440hz_1s.wav`, `silence_1s.wav` (16kHz mono i16) |
-| **Web demo** | ✅ Done | `system/voicebot-core-demo/` — browser mic → WS → chat UI + TTS playback |
+| **Web demo** | ✅ Done | `system/voicebot-core-demo/` — browser mic → WS → chat UI + TTS playback; `start.sh` boots Speaches + voicebot server + static server in one command |
 
 ---
 

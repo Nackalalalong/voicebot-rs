@@ -5,28 +5,49 @@ Captures microphone audio, sends it over WebSocket, and displays the conversatio
 
 ## Quick Start
 
-1. **Start the voicebot server:**
+**One-command start** — builds the server, starts Speaches in Docker, and serves the web app:
 
-    ```bash
-    cd voicebot && cargo run -p voicebot-server
-    ```
+```bash
+cd system/voicebot-core-demo && ./start.sh
+```
 
-2. **Start the Speaches backend** (if not already running):
+Then open **http://localhost:3000**, click **Connect**, and press **Mic** (or Space) to talk.
+
+### Options
+
+| Flag                | Default | Description                              |
+| ------------------- | ------- | ---------------------------------------- |
+| `--no-build`        | —       | Skip `cargo build` (use existing binary) |
+| `--web-port PORT`   | `3000`  | Port for the static file server          |
+| `WEB_PORT=...`      | `3000`  | Same as `--web-port` via env var         |
+| `VOICEBOT_PORT=...` | `8080`  | Override voicebot server port            |
+
+### Manual Start (alternative)
+
+<details>
+<summary>Start each component individually</summary>
+
+1. **Speaches** (Docker):
 
     ```bash
     cd system/speaches && docker compose -f compose.cpu.yaml up -d
     ```
 
-3. **Serve this directory** (any static file server works):
+2. **Voicebot server:**
 
     ```bash
-    cd system/voicebot-core-demo
-    python3 -m http.server 3000
+    cd voicebot && cargo run --release -p voicebot-server
     ```
 
-4. **Open** http://localhost:3000 in your browser.
+3. **Web server** (any static file server):
 
-5. **Click Connect**, then **click Mic** (or press Space) to start talking.
+    ```bash
+    cd system/voicebot-core-demo && python3 -m http.server 3000
+    ```
+
+4. Open http://localhost:3000.
+
+</details>
 
 ## How It Works
 
