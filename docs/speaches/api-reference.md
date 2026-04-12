@@ -51,13 +51,13 @@ Translate audio speech to English text.
 
 **Content-Type:** `multipart/form-data`
 
-| Field             | Type        | Required | Default  | Notes                                  |
-| ----------------- | ----------- | -------- | -------- | -------------------------------------- |
-| `file`            | file upload | yes      | —        | Audio file                             |
-| `model`           | string      | yes      | —        | e.g. `Systran/faster-distil-whisper-large-v3` |
-| `prompt`          | string      | no       | `null`   |                                        |
-| `response_format` | string      | no       | `"json"` | `text`, `json`, `verbose_json`         |
-| `temperature`     | float       | no       | `0.0`    |                                        |
+| Field | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `file` | file upload | yes | — | Audio file |
+| `model` | string | yes | — | e.g. `Systran/faster-distil-whisper-large-v3` |
+| `prompt` | string | no | `null` |  |
+| `response_format` | string | no | `"json"` | `text`, `json`, `verbose_json` |
+| `temperature` | float | no | `0.0` |  |
 
 **Response:**
 

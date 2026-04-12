@@ -68,29 +68,29 @@ curl -X POST http://localhost:8000/v1/models/speaches-ai/Kokoro-82M-v1.0-ONNX
 
 #### Available English Voices
 
-| Voice ID | Language | Gender | Description |
-| --- | --- | --- | --- |
-| `af_heart` | en-us | female | **Default.** Warm, natural |
-| `af_alloy` | en-us | female | Neutral, balanced |
-| `af_bella` | en-us | female | Expressive |
-| `af_jessica` | en-us | female | Clear, professional |
-| `af_nicole` | en-us | female | Friendly |
-| `af_nova` | en-us | female | Bright, energetic |
-| `af_river` | en-us | female | Calm, flowing |
-| `af_sarah` | en-us | female | Conversational |
-| `af_sky` | en-us | female | Light, airy |
-| `am_adam` | en-us | male | Clear, articulate |
-| `am_echo` | en-us | male | Resonant |
-| `am_eric` | en-us | male | Professional |
-| `am_liam` | en-us | male | Young, friendly |
-| `am_michael` | en-us | male | Authoritative |
-| `am_onyx` | en-us | male | Deep, rich |
-| `am_puck` | en-us | male | Playful |
-| `bf_alice` | en-gb | female | British, refined |
-| `bf_emma` | en-gb | female | British, warm |
-| `bf_lily` | en-gb | female | British, gentle |
-| `bm_daniel` | en-gb | male | British, clear |
-| `bm_george` | en-gb | male | British, authoritative |
+| Voice ID     | Language | Gender | Description                |
+| ------------ | -------- | ------ | -------------------------- |
+| `af_heart`   | en-us    | female | **Default.** Warm, natural |
+| `af_alloy`   | en-us    | female | Neutral, balanced          |
+| `af_bella`   | en-us    | female | Expressive                 |
+| `af_jessica` | en-us    | female | Clear, professional        |
+| `af_nicole`  | en-us    | female | Friendly                   |
+| `af_nova`    | en-us    | female | Bright, energetic          |
+| `af_river`   | en-us    | female | Calm, flowing              |
+| `af_sarah`   | en-us    | female | Conversational             |
+| `af_sky`     | en-us    | female | Light, airy                |
+| `am_adam`    | en-us    | male   | Clear, articulate          |
+| `am_echo`    | en-us    | male   | Resonant                   |
+| `am_eric`    | en-us    | male   | Professional               |
+| `am_liam`    | en-us    | male   | Young, friendly            |
+| `am_michael` | en-us    | male   | Authoritative              |
+| `am_onyx`    | en-us    | male   | Deep, rich                 |
+| `am_puck`    | en-us    | male   | Playful                    |
+| `bf_alice`   | en-gb    | female | British, refined           |
+| `bf_emma`    | en-gb    | female | British, warm              |
+| `bf_lily`    | en-gb    | female | British, gentle            |
+| `bm_daniel`  | en-gb    | male   | British, clear             |
+| `bm_george`  | en-gb    | male   | British, authoritative     |
 
 ## Language Note
 
