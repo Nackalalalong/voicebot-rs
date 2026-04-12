@@ -1,6 +1,6 @@
 # PLAN — voicebot-rs
 
-> 69 tests passing + 13 ignored integration tests · 9 crates implemented + 1 planned loadtest package · Milestones 1–5 and 7–10 complete, 6 partial, 11 planned
+> 74 tests passing + 13 ignored integration tests · 10 crates implemented · Milestones 1–5 and 7–10 complete, 6 partial, 11 partial
 
 ---
 
@@ -18,7 +18,7 @@
 | 8 | **Integration** — end-to-end with interrupt | ✅ Done | 8 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test, new-speech-cancels-previous-ASR regression |
 | 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root, ignored integration tests for ARI REST, WebSocket, endpoint status, and originate/hangup. |
 | 10 | **Observability** — metrics, config validation, fallbacks | ✅ Done | 2 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown, fallback provider wiring in `core::session`, session lifecycle metrics in `PipelineSession` |
-| 11 | **loadtest** — virtual phone load harness | 🔵 Planned | 0 | New phone-emulator package for SIP registration, inbound/outbound calls, scripted WAV playback, received-audio recording, scoring, and campaign summaries. Must reuse current Asterisk environment instead of introducing a parallel telephony stack into core. |
+| 11 | **loadtest** — virtual phone load harness | 🟡 Partial | 5 | `voicebot-loadtest` crate added with Phase 1 outbound Asterisk external-media backend, WAV normalization, TX/RX artifact writing, summary JSON, and first-response / silence-gap analysis. Phase 2 explicitly targets `xphone` for native SIP registration and inbound/outbound virtual-phone behavior. |
 
 ---
 
@@ -117,13 +117,14 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 
 ### Priority 6 — Phone call loadtesting (M11)
 
-- [ ] **New package `crates/loadtest`** — library + CLI for campaign execution (`cargo run -p voicebot-loadtest -- ...`)
-- [ ] **Phone backend abstraction** — keep signaling/media backend behind a trait; do not hardwire the first implementation into core or `transport/asterisk`
-- [ ] **Outbound mode** — register virtual phones, place calls into Asterisk/voicebot, play scripted WAVs, record received audio, hang up cleanly
+- [x] **New package `crates/loadtest`** — library + CLI for campaign execution (`cargo run -p voicebot-loadtest -- ...`)
+- [x] **Phone backend abstraction** — keep signaling/media backend behind a trait; do not hardwire the first implementation into core or `transport/asterisk`
+- [~] **Outbound mode** — single-call Asterisk external-media outbound flow implemented with WAV playback, RX recording, and summary output. SIP registration is deferred to Phase 2.
 - [ ] **Inbound mode** — register virtual phones, wait for inbound INVITE, answer automatically, run the same scripted conversation flow
 - [ ] **Campaign scheduler** — concurrency, ramp-up, call rate, retry policy, soak duration, stop conditions, seeded determinism
-- [ ] **Audio scoring** — first-response latency, silent-gap metrics, continuity/stutter heuristics, clipping/underrun counters, per-turn and per-call scores
-- [ ] **Artifacts + reports** — per-call WAV/JSON logs plus campaign-level Markdown/HTML/JSON summary
+- [~] **Audio scoring** — Phase 1 includes first-response latency, voiced/silence duration, and gap metrics. Stutter/smoothness scoring remains open.
+- [~] **Artifacts + reports** — Phase 1 writes normalized TX WAV, RX WAV, resolved config, and summary JSON. Markdown/HTML campaign reports remain open.
+- [ ] **Phase 2 native SIP backend** — implement virtual phone registration, inbound call handling, and reusable phone sessions with `xphone`
 
 ---
 
@@ -158,6 +159,13 @@ What does not exist yet is a client-side phone emulator. Because Rust SIP user-a
 - Phase 1 recommendation: implement a pragmatic backend that can be supervised reliably for registration, call answer/dial, WAV playback, and RX recording.
 - Do not bake a native SIP stack assumption into the package API.
 - Keep the backend replaceable so a future native Rust UA can be added later without rewriting campaign logic, scoring, or reporting.
+
+After researching the Rust telephony ecosystem, Phase 2 should explicitly target `xphone` as the native SIP backend:
+
+- `xphone` is the strongest fit for the next milestone because it already exposes SIP registration, inbound/outbound call handling, DTMF, and PCM media channels in Rust.
+- `fakepbx` is useful as a test helper for SIP integration, but not as the runtime phone backend.
+- `rvoip` and C-library bindings (`pjsip`, `sofia-sip`) add more integration risk than value for this repo at the current stage.
+- Low-level crates such as `sip-uri`, `sdp`, `rtp`, and `stun` remain optional helpers, not Phase 2 foundations.
 
 ### Package Shape
 
@@ -543,19 +551,18 @@ This matters because scaling bugs and media-quality bugs are different classes o
 - play one WAV, record RX, write summary JSON
 - no scoring beyond first-response and silence-gap metrics
 
-#### Phase 2 — real campaign scheduler
+#### Phase 2 — xphone-backed virtual phones
 
-- phone pool
-- concurrency and ramp-up
-- retries, stop conditions, artifact tree
-- campaign summary Markdown/HTML
+- add an `xphone` backend for native SIP registration and call control
+- support reusable virtual-phone identities with register / unregister lifecycle
+- add inbound and outbound call execution on top of the same flow runner
+- keep the existing Asterisk external-media backend as a simpler fallback backend
 
 #### Phase 3 — inbound mode
 
-- registration management
-- wait for inbound call
-- auto-answer
-- same flow runner reused for inbound scripts
+- campaign scheduler, phone pool, concurrency, retries, and stop conditions
+- same flow runner reused across Asterisk-backed and `xphone`-backed sessions
+- artifact tree growth from single-call outputs to campaign outputs
 
 #### Phase 4 — scoring and quality analytics
 

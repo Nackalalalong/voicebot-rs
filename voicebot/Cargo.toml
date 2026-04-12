@@ -7,6 +7,7 @@ members = [
     "crates/agent",
     "crates/tts",
     "crates/core",
+    "crates/loadtest",
     "crates/transport/websocket",
     "crates/transport/asterisk",
     "crates/server",

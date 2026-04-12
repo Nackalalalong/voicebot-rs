@@ -1,0 +1,27 @@
+[backend]
+kind = "asterisk-external-media"
+
+[backend.asterisk]
+ari_host = "localhost"
+ari_port = 8088
+username = "voicebot"
+password = "voicebot"
+app_name = "voicebot-loadtest"
+audio_host = "172.17.0.1"
+accept_timeout_ms = 10000
+
+[campaign]
+name = "phase1-outbound"
+target_endpoint = "Local/1000@dp_entry_call_in"
+caller_id = "voicebot-loadtest"
+settle_before_playback_ms = 500
+record_after_playback_ms = 3000
+
+[media]
+input_wav = "crates/loadtest/fixtures/tone_1s_16k.wav"
+artifact_dir = "artifacts/loadtest"
+
+[analysis]
+silence_threshold = 0.02
+window_ms = 20
+gap_threshold_ms = 250
