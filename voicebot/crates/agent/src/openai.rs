@@ -86,7 +86,8 @@ impl LlmProvider for OpenAiProvider {
             "model": self.model,
             "messages": messages,
             "stream": true,
-            "max_tokens": 1024
+            "max_tokens": 1024,
+            "reasoning_effort": "none",
         });
 
         if !tools.is_empty() {
