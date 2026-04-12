@@ -262,6 +262,11 @@ async fn send_pipeline_event(
             let bytes = frame.to_pcm_bytes();
             sink.send(Message::Binary(bytes.into())).await?;
         }
+        PipelineEvent::TtsComplete => {
+            let json = serde_json::to_string(&ServerMessage::TtsComplete)
+                .map_err(|e| TransportError::InvalidJson(e.to_string()))?;
+            sink.send(Message::Text(json.into())).await?;
+        }
         PipelineEvent::ComponentError {
             component,
             error,

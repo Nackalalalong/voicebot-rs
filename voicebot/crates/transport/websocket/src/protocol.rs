@@ -26,6 +26,8 @@ pub enum ServerMessage {
     AgentPartial { text: String },
     #[serde(rename = "agent_final")]
     AgentFinal { text: String },
+    #[serde(rename = "tts_complete")]
+    TtsComplete,
     #[serde(rename = "error")]
     Error { code: String, recoverable: bool },
 }
