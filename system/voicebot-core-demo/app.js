@@ -80,6 +80,7 @@ function connect() {
     if (!url) return;
 
     setStatus('connecting', 'Connecting...');
+    if (!audioCtx) audioCtx = new AudioContext();
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
 
@@ -97,6 +98,7 @@ function connect() {
                 language: languageSelect.value,
                 asr: 'speaches',
                 tts: 'speaches',
+                sample_rate: Math.round(audioCtx?.sampleRate || SAMPLE_RATE),
             }),
         );
     };
@@ -322,51 +324,38 @@ async function startMic() {
     }
 
     if (!audioCtx) {
-        audioCtx = new AudioContext({sampleRate: SAMPLE_RATE});
+        audioCtx = new AudioContext();
     }
 
-    // Resample if browser context rate differs from 16kHz
     const source = audioCtx.createMediaStreamSource(micStream);
 
     // Use ScriptProcessor for PCM extraction (AudioWorklet alternative is more complex)
     const bufferSize = 4096;
     processor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
     let residual = new Float32Array(0);
+    const inputFrameSize = Math.max(1, Math.round(audioCtx.sampleRate / 50));
 
     processor.onaudioprocess = (e) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-        const input = e.inputBuffer.getChannelData(0);
-
-        // If AudioContext sampleRate != 16kHz, resample
-        let samples;
-        if (audioCtx.sampleRate !== SAMPLE_RATE) {
-            const ratio = audioCtx.sampleRate / SAMPLE_RATE;
-            const outLen = Math.floor(input.length / ratio);
-            samples = new Float32Array(outLen);
-            for (let i = 0; i < outLen; i++) {
-                samples[i] = input[Math.floor(i * ratio)];
-            }
-        } else {
-            samples = input;
-        }
+        const samples = e.inputBuffer.getChannelData(0);
 
         // Merge with residual from previous callback
         const merged = new Float32Array(residual.length + samples.length);
         merged.set(residual);
         merged.set(samples, residual.length);
 
-        // Send complete 20ms frames (320 samples)
+        // Send complete 20ms frames at the native input sample rate.
         let offset = 0;
-        while (offset + FRAME_SIZE <= merged.length) {
-            const frame = merged.subarray(offset, offset + FRAME_SIZE);
-            const i16 = new Int16Array(FRAME_SIZE);
-            for (let i = 0; i < FRAME_SIZE; i++) {
+        while (offset + inputFrameSize <= merged.length) {
+            const frame = merged.subarray(offset, offset + inputFrameSize);
+            const i16 = new Int16Array(inputFrameSize);
+            for (let i = 0; i < inputFrameSize; i++) {
                 const s = Math.max(-1, Math.min(1, frame[i]));
                 i16[i] = s < 0 ? s * 32768 : s * 32767;
             }
             ws.send(i16.buffer);
-            offset += FRAME_SIZE;
+            offset += inputFrameSize;
         }
 
         // Save remaining samples

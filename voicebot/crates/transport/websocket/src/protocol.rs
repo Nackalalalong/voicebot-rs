@@ -10,6 +10,8 @@ pub enum ClientMessage {
         language: String,
         asr: String,
         tts: String,
+        #[serde(default)]
+        sample_rate: Option<u32>,
     },
     #[serde(rename = "session_end")]
     SessionEnd,
@@ -42,10 +44,15 @@ mod tests {
 
     #[test]
     fn test_parse_session_start() {
-        let json =
-            r#"{"type": "session_start", "language": "th", "asr": "speaches", "tts": "speaches"}"#;
+        let json = r#"{"type": "session_start", "language": "th", "asr": "speaches", "tts": "speaches", "sample_rate": 48000}"#;
         let msg = parse_client_message(json).unwrap();
-        assert!(matches!(msg, ClientMessage::SessionStart { .. }));
+        assert!(matches!(
+            msg,
+            ClientMessage::SessionStart {
+                sample_rate: Some(48000),
+                ..
+            }
+        ));
     }
 
     #[test]

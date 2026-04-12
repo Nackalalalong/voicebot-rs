@@ -8,12 +8,163 @@ use common::config::AppConfig;
 use common::events::{PipelineEvent, SessionConfig, VadConfig};
 use common::types::{AsrProviderType, Language, LlmProviderType, TtsProviderType};
 use futures::{SinkExt, StreamExt};
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{Fft, FixedSync, Resampler};
 use std::sync::Arc;
 use uuid::Uuid;
 use voicebot_core::session::PipelineSession;
 
 use crate::error::TransportError;
 use crate::protocol::{parse_client_message, ClientMessage, ServerMessage};
+
+const PIPELINE_SAMPLE_RATE: u32 = 16_000;
+const PIPELINE_FRAME_SAMPLES: usize = 320;
+const PIPELINE_FRAME_DURATION_MS: u64 = 20;
+
+struct WebSocketSessionStart {
+    pipeline_config: SessionConfig,
+    input_sample_rate: u32,
+}
+
+struct InboundAudioDecoder {
+    next_timestamp_ms: u64,
+    output_residual: Vec<i16>,
+    mode: InboundAudioMode,
+}
+
+enum InboundAudioMode {
+    Canonical,
+    Resampled(SessionResampler),
+}
+
+struct SessionResampler {
+    input_chunk_samples: usize,
+    input_buffer: Vec<f32>,
+    delay_samples_to_trim: usize,
+    resampler: Fft<f32>,
+}
+
+impl InboundAudioDecoder {
+    fn new(input_sample_rate: u32) -> Result<Self, TransportError> {
+        if input_sample_rate == 0 {
+            return Err(TransportError::InvalidSampleRate(input_sample_rate));
+        }
+
+        let mode = if input_sample_rate == PIPELINE_SAMPLE_RATE {
+            InboundAudioMode::Canonical
+        } else {
+            InboundAudioMode::Resampled(SessionResampler::new(input_sample_rate)?)
+        };
+
+        Ok(Self {
+            next_timestamp_ms: 0,
+            output_residual: Vec::with_capacity(PIPELINE_FRAME_SAMPLES * 2),
+            mode,
+        })
+    }
+
+    fn decode(&mut self, bytes: &[u8]) -> Result<Vec<AudioFrame>, TransportError> {
+        if bytes.len() % 2 != 0 {
+            return Err(TransportError::InvalidFrameSize(bytes.len()));
+        }
+
+        let samples: Vec<i16> = bytes
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
+
+        let normalized_samples = match &mut self.mode {
+            InboundAudioMode::Canonical => samples,
+            InboundAudioMode::Resampled(resampler) => resampler.process(&samples)?,
+        };
+
+        self.output_residual.extend(normalized_samples);
+
+        let mut frames = Vec::new();
+        while self.output_residual.len() >= PIPELINE_FRAME_SAMPLES {
+            let frame_samples: Vec<i16> = self
+                .output_residual
+                .drain(..PIPELINE_FRAME_SAMPLES)
+                .collect();
+            frames.push(AudioFrame::new(frame_samples, self.next_timestamp_ms));
+            self.next_timestamp_ms += PIPELINE_FRAME_DURATION_MS;
+        }
+
+        Ok(frames)
+    }
+}
+
+impl SessionResampler {
+    fn new(input_sample_rate: u32) -> Result<Self, TransportError> {
+        let input_chunk_samples = samples_per_20ms(input_sample_rate);
+        let resampler = Fft::<f32>::new(
+            input_sample_rate as usize,
+            PIPELINE_SAMPLE_RATE as usize,
+            input_chunk_samples,
+            1,
+            1,
+            FixedSync::Input,
+        )
+        .map_err(|e| TransportError::AudioResampler(e.to_string()))?;
+        let delay_samples_to_trim = resampler.output_delay();
+
+        Ok(Self {
+            input_chunk_samples,
+            input_buffer: Vec::with_capacity(input_chunk_samples * 2),
+            delay_samples_to_trim,
+            resampler,
+        })
+    }
+
+    fn process(&mut self, input_samples: &[i16]) -> Result<Vec<i16>, TransportError> {
+        self.input_buffer
+            .extend(input_samples.iter().map(|&sample| i16_to_f32(sample)));
+
+        let mut output = Vec::new();
+        while self.input_buffer.len() >= self.input_chunk_samples {
+            let chunk: Vec<f32> = self
+                .input_buffer
+                .drain(..self.input_chunk_samples)
+                .collect();
+            let input = InterleavedSlice::<&[f32]>::new(&chunk, 1, self.input_chunk_samples)
+                .map_err(|e| TransportError::AudioResampler(e.to_string()))?;
+            let resampled = self
+                .resampler
+                .process(&input, 0, None)
+                .map_err(|e| TransportError::AudioResampler(e.to_string()))?
+                .take_data();
+
+            let trimmed = if self.delay_samples_to_trim == 0 {
+                resampled
+            } else {
+                let to_trim = self.delay_samples_to_trim.min(resampled.len());
+                self.delay_samples_to_trim -= to_trim;
+                resampled.into_iter().skip(to_trim).collect()
+            };
+
+            output.extend(trimmed.into_iter().map(f32_to_i16));
+        }
+
+        Ok(output)
+    }
+}
+
+fn samples_per_20ms(sample_rate: u32) -> usize {
+    ((sample_rate as usize) + 25) / 50
+}
+
+fn i16_to_f32(sample: i16) -> f32 {
+    sample as f32 / i16::MAX as f32
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    if clamped < 0.0 {
+        (clamped * 32768.0) as i16
+    } else {
+        (clamped * 32767.0) as i16
+    }
+}
 
 /// Build the Axum router with the `/session` WebSocket endpoint.
 /// When called without config, uses stub providers.
@@ -55,7 +206,7 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
     let (mut ws_sink, mut ws_stream) = ws.split();
 
     // Wait for session_start with 10s timeout
-    let config = match tokio::time::timeout(
+    let session_start = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
         wait_for_session_start(&mut ws_stream, session_id),
     )
@@ -80,8 +231,19 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
 
     // Start pipeline session
     let session_result = match app_config {
-        Some(ref cfg) => PipelineSession::start_with_config(cfg, config, audio_rx, egress_tx).await,
-        None => PipelineSession::start_with_stubs(config, audio_rx, egress_tx).await,
+        Some(ref cfg) => {
+            PipelineSession::start_with_config(
+                cfg,
+                session_start.pipeline_config,
+                audio_rx,
+                egress_tx,
+            )
+            .await
+        }
+        None => {
+            PipelineSession::start_with_stubs(session_start.pipeline_config, audio_rx, egress_tx)
+                .await
+        }
     };
     let mut session = match session_result {
         Ok(s) => s,
@@ -94,6 +256,7 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
     // Run bidirectional bridge
     run_ws_bridge(
         session_id,
+        session_start.input_sample_rate,
         &audio_tx,
         &mut egress_rx,
         &mut ws_sink,
@@ -111,20 +274,40 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
 async fn wait_for_session_start(
     ws_stream: &mut futures::stream::SplitStream<WebSocket>,
     session_id: Uuid,
-) -> Result<SessionConfig, TransportError> {
+) -> Result<WebSocketSessionStart, TransportError> {
     while let Some(msg) = ws_stream.next().await {
         match msg {
             Ok(Message::Text(text)) => match parse_client_message(&text) {
-                Ok(ClientMessage::SessionStart { language, asr, tts }) => {
-                    tracing::info!(%session_id, %language, %asr, %tts, "session_start received");
-                    return Ok(SessionConfig {
-                        session_id,
-                        language: Language::from_str_loose(&language),
-                        asr_provider: AsrProviderType::from_str_loose(&asr),
-                        tts_provider: TtsProviderType::from_str_loose(&tts),
-                        llm_provider: LlmProviderType::OpenAi,
-                        vad_config: VadConfig::default(),
-                        system_prompt: None,
+                Ok(ClientMessage::SessionStart {
+                    language,
+                    asr,
+                    tts,
+                    sample_rate,
+                }) => {
+                    let input_sample_rate = sample_rate.unwrap_or(PIPELINE_SAMPLE_RATE);
+                    if input_sample_rate == 0 {
+                        return Err(TransportError::InvalidSampleRate(input_sample_rate));
+                    }
+
+                    tracing::info!(
+                        %session_id,
+                        %language,
+                        %asr,
+                        %tts,
+                        input_sample_rate,
+                        "session_start received"
+                    );
+                    return Ok(WebSocketSessionStart {
+                        pipeline_config: SessionConfig {
+                            session_id,
+                            language: Language::from_str_loose(&language),
+                            asr_provider: AsrProviderType::from_str_loose(&asr),
+                            tts_provider: TtsProviderType::from_str_loose(&tts),
+                            llm_provider: LlmProviderType::OpenAi,
+                            vad_config: VadConfig::default(),
+                            system_prompt: None,
+                        },
+                        input_sample_rate,
                     });
                 }
                 Ok(_) => {
@@ -157,23 +340,35 @@ async fn wait_for_session_start(
 /// The loop exits on client disconnect, `session_end`, or send failure.
 async fn run_ws_bridge(
     session_id: Uuid,
+    input_sample_rate: u32,
     audio_tx: &tokio::sync::mpsc::Sender<AudioFrame>,
     egress_rx: &mut tokio::sync::mpsc::Receiver<PipelineEvent>,
     ws_sink: &mut futures::stream::SplitSink<WebSocket, Message>,
     ws_stream: &mut futures::stream::SplitStream<WebSocket>,
 ) {
-    let mut frame_counter: u64 = 0; // monotonic counter → derives timestamp_ms (20ms per frame)
+    let mut decoder = match InboundAudioDecoder::new(input_sample_rate) {
+        Ok(decoder) => decoder,
+        Err(e) => {
+            tracing::error!(%session_id, "failed to initialize audio decoder: {}", e);
+            return;
+        }
+    };
+
+    if input_sample_rate != PIPELINE_SAMPLE_RATE {
+        tracing::info!(%session_id, input_sample_rate, "WebSocket ingress resampling enabled");
+    }
+
     loop {
         tokio::select! {
             msg = ws_stream.next() => {
                 match msg {
                     Some(Ok(Message::Binary(bytes))) => {
-                        let timestamp_ms = frame_counter * 20;
-                        frame_counter += 1;
-                        match parse_audio_frame(&bytes, timestamp_ms) {
-                            Ok(frame) => {
-                                if audio_tx.try_send(frame).is_err() {
-                                    tracing::warn!(%session_id, "audio channel full, dropping frame");
+                        match decoder.decode(&bytes) {
+                            Ok(frames) => {
+                                for frame in frames {
+                                    if audio_tx.try_send(frame).is_err() {
+                                        tracing::warn!(%session_id, "audio channel full, dropping frame");
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -214,15 +409,6 @@ async fn run_ws_bridge(
             }
         }
     }
-}
-
-/// Convert raw binary WS frame bytes into an `AudioFrame`.
-/// Expects PCM i16 little-endian, 16 kHz mono (so byte count must be even).
-fn parse_audio_frame(bytes: &[u8], timestamp_ms: u64) -> Result<AudioFrame, TransportError> {
-    if bytes.len() % 2 != 0 {
-        return Err(TransportError::InvalidFrameSize(bytes.len()));
-    }
-    Ok(AudioFrame::from_pcm_bytes(bytes, timestamp_ms))
 }
 
 /// Translate a `PipelineEvent` into a WebSocket frame and send it.
@@ -291,16 +477,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_audio_frame_valid() {
+    fn test_inbound_audio_decoder_passthrough() {
+        let mut decoder = InboundAudioDecoder::new(PIPELINE_SAMPLE_RATE).unwrap();
         let samples: Vec<i16> = vec![100, -100, 200];
-        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
-        let frame = parse_audio_frame(&bytes, 0).unwrap();
-        assert_eq!(frame.data.len(), 3);
+        let mut input = Vec::new();
+        while input.len() < PIPELINE_FRAME_SAMPLES {
+            input.extend_from_slice(&samples);
+        }
+        input.truncate(PIPELINE_FRAME_SAMPLES);
+
+        let bytes: Vec<u8> = input.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let frames = decoder.decode(&bytes).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].sample_rate, PIPELINE_SAMPLE_RATE);
+        assert_eq!(frames[0].num_samples(), PIPELINE_FRAME_SAMPLES);
     }
 
     #[test]
-    fn test_parse_audio_frame_odd_bytes() {
+    fn test_inbound_audio_decoder_rejects_odd_bytes() {
+        let mut decoder = InboundAudioDecoder::new(PIPELINE_SAMPLE_RATE).unwrap();
         let bytes = vec![0u8, 1, 2]; // 3 bytes = odd
-        assert!(parse_audio_frame(&bytes, 0).is_err());
+        assert!(decoder.decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_inbound_audio_decoder_resamples_48khz() {
+        let mut decoder = InboundAudioDecoder::new(48_000).unwrap();
+        let silent_frame = vec![0i16; samples_per_20ms(48_000)];
+        let bytes: Vec<u8> = silent_frame.iter().flat_map(|s| s.to_le_bytes()).collect();
+
+        let mut frames = Vec::new();
+        for _ in 0..8 {
+            frames.extend(decoder.decode(&bytes).unwrap());
+            if !frames.is_empty() {
+                break;
+            }
+        }
+
+        assert!(!frames.is_empty());
+        assert_eq!(frames[0].sample_rate, PIPELINE_SAMPLE_RATE);
+        assert_eq!(frames[0].num_samples(), PIPELINE_FRAME_SAMPLES);
     }
 }

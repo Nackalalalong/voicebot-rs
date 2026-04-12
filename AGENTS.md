@@ -9,6 +9,7 @@ All agent skills live in `skills/<name>/SKILL.md`. Read the relevant skill befor
 | `audio_dsp` | Audio formats, codec conversion, VAD frame sizing, jitter buffer |
 | `rust_async` | Tokio patterns, channels, cancellation, spawn_blocking |
 | `rust` | Comprehensive Rust coding guidelines with 179 rules across 14 categories. Use when writing, reviewing, or refactoring Rust code. Covers ownership, error handling, async patterns, API design, memory optimization, performance, testing, and common anti-patterns |
+| `robuto` | resample audio in Rust — changing sample rate, normalizing mic input to 16 kHz for ASR, handling variable-rate streams, or converting between 8/16/44.1/48 kHz. Trigger on: rubato, resample, sample rate, 16kHz, 48kHz, SincFixedIn, SincFixedOut, rate conversion, audio format normalization. |
 | `error_handling_and_fault_tolerance` | Error types, retry matrix, fallback providers |
 | `provider_integration` | OpenAI-compatible API integration (Speaches, vLLM, etc.) |
 | `speaches` | Speaches server: ASR (faster-whisper), TTS (Kokoro/Piper), Realtime WS |
