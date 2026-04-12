@@ -1,10 +1,13 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use common::audio::AudioFrame;
 use common::config::AppConfig;
+use common::error::{PanicOnProviderError, ProviderFailureHandler};
 use common::events::{PipelineEvent, SessionConfig};
 use common::testing::ReceiverAudioStream;
 use common::traits::{AsrProvider, LlmProvider, TtsProvider};
+use common::types::Component;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -127,6 +130,28 @@ impl PipelineSession {
         llm: Arc<dyn LlmProvider>,
         tts: Arc<dyn TtsProvider>,
     ) -> Result<Self, SessionError> {
+        Self::start_with_handler(
+            config,
+            audio_rx,
+            egress_tx,
+            asr,
+            llm,
+            tts,
+            Arc::new(PanicOnProviderError),
+        )
+        .await
+    }
+
+    /// Start with an explicit failure handler (useful for testing).
+    pub async fn start_with_handler(
+        config: SessionConfig,
+        audio_rx: Receiver<AudioFrame>,
+        egress_tx: Sender<PipelineEvent>,
+        asr: Arc<dyn AsrProvider>,
+        llm: Arc<dyn LlmProvider>,
+        tts: Arc<dyn TtsProvider>,
+        failure_handler: Arc<dyn ProviderFailureHandler>,
+    ) -> Result<Self, SessionError> {
         let cancel_token = CancellationToken::new();
         let session_id = config.session_id;
 
@@ -135,45 +160,114 @@ impl PipelineSession {
 
         let mut handles = Vec::new();
 
-        // Audio fanout — fork incoming audio to both VAD and ASR
-        let (vad_audio_tx, vad_audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(50);
-        let (asr_audio_tx, asr_audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(100);
+        // Audio fanout — gateway for VAD audio forwarding
+        // VAD receives all frames continuously; ASR receives only speech utterances.
+        // Small capacity forces send().await to yield when VAD lags, giving it
+        // CPU time to process frames and fire speech events into speech_state_rx.
+        let (vad_audio_tx, vad_audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(16);
+
+        // Speech state channel: VAD sends true on SpeechStarted, false on SpeechEnded.
+        // Using mpsc (not watch) so events are queued and never missed,
+        // even if the fanout is busy sending audio frames.
+        let (speech_state_tx, mut speech_state_rx) = tokio::sync::mpsc::channel::<bool>(8);
+
+        // Fanout + per-utterance ASR spawner.
+        // Keeps a small pre-buffer so frames before the watch update are included in the utterance.
+        const PRE_BUFFER_FRAMES: usize = 15; // ~300ms to cover min_speech_ms latency
         let fanout_token = cancel_token.child_token();
+        let asr_event_tx = event_tx.clone();
+        let asr_failure_handler = Arc::clone(&failure_handler);
+        let asr_for_fanout = Arc::clone(&asr);
         handles.push(tokio::spawn(async move {
             let mut rx = audio_rx;
+            let mut pre_buffer: VecDeque<AudioFrame> = VecDeque::with_capacity(PRE_BUFFER_FRAMES + 1);
+            let mut current_asr_tx: Option<tokio::sync::mpsc::Sender<AudioFrame>> = None;
+
             loop {
                 tokio::select! {
+                    biased;
+
                     _ = fanout_token.cancelled() => break,
-                    frame = rx.recv() => {
-                        match frame {
-                            Some(f) => {
-                                // Clone is cheap — AudioFrame uses Arc<[i16]>
-                                let _ = vad_audio_tx.try_send(f.clone());
-                                let _ = asr_audio_tx.try_send(f);
+
+                    // Process speech state transitions immediately as they arrive.
+                    // Using a separate select arm means we never miss an event
+                    // regardless of audio frame timing.
+                    speaking = speech_state_rx.recv() => {
+                        match speaking {
+                            Some(true) if current_asr_tx.is_none() => {
+                                // Speech started: open utterance channel, pre-fill, spawn ASR.
+                                let (asr_tx, asr_rx) = tokio::sync::mpsc::channel::<AudioFrame>(200);
+                                for buffered in pre_buffer.drain(..) {
+                                    let _ = asr_tx.try_send(buffered);
+                                }
+                                current_asr_tx = Some(asr_tx);
+                                let asr_clone = Arc::clone(&asr_for_fanout);
+                                let ev_tx = asr_event_tx.clone();
+                                let handler = Arc::clone(&asr_failure_handler);
+                                let asr_cancel = fanout_token.child_token();
+                                tokio::spawn(async move {
+                                    tracing::info!("ASR provider call started");
+                                    let audio_stream = ReceiverAudioStream::new(asr_rx);
+                                    let result = tokio::select! {
+                                        r = asr_clone.stream(Box::new(audio_stream), ev_tx) => r,
+                                        _ = asr_cancel.cancelled() => Ok(()),
+                                    };
+                                    match &result {
+                                        Ok(()) => tracing::info!("ASR provider call completed"),
+                                        Err(e) => tracing::warn!(error = %e, "ASR provider call failed"),
+                                    }
+                                    if let Err(e) = result {
+                                        if !matches!(e, common::error::AsrError::ChannelClosed | common::error::AsrError::Cancelled) {
+                                            handler.on_provider_failure(Component::Asr, &e);
+                                        }
+                                    }
+                                });
                             }
-                            None => break,
+                            Some(false) => {
+                                // Speech ended: drop sender — ASR drains remaining frames then processes.
+                                current_asr_tx = None;
+                            }
+                            None => break, // VAD task exited
+                            _ => {}
                         }
+                    }
+
+                    // Route audio frames to pre-buffer, active ASR utterance, and VAD.
+                    frame = rx.recv() => {
+                        let f = match frame {
+                            Some(f) => f,
+                            None => break,
+                        };
+
+                        // Rolling pre-buffer for speech onset recovery.
+                        pre_buffer.push_back(f.clone());
+                        if pre_buffer.len() > PRE_BUFFER_FRAMES {
+                            pre_buffer.pop_front();
+                        }
+
+                        // Forward to current ASR utterance if speech is active.
+                        if let Some(ref tx) = current_asr_tx {
+                            let _ = tx.try_send(f.clone());
+                        }
+
+                        // Forward to VAD. Using send().await provides backpressure
+                        // that yields the scheduler, giving VAD task time to run and
+                        // fire speech events into speech_state_rx.
+                        let _ = vad_audio_tx.send(f).await;
                     }
                 }
             }
         }));
 
-        // VAD component: reads audio, emits SpeechStarted/SpeechEnded to event_tx
+        // VAD component: reads audio, emits SpeechStarted/SpeechEnded to event_tx,
+        // and updates speech_state_tx for the fanout's ASR gating.
         let vad_token = cancel_token.child_token();
         let vad_event_tx = event_tx.clone();
-        let mut vad = VadComponent::new(config.vad_config.clone(), vad_event_tx, vad_token);
+        let mut vad = VadComponent::new(config.vad_config.clone(), vad_event_tx, vad_token)
+            .with_speech_state(speech_state_tx);
         handles.push(tokio::spawn(async move {
             let audio_stream = ReceiverAudioStream::new(vad_audio_rx);
             vad.run(Box::new(audio_stream)).await;
-        }));
-
-        // ASR: reads audio, emits FinalTranscript to event_tx
-        let asr_event_tx = event_tx.clone();
-        handles.push(tokio::spawn(async move {
-            let audio_stream = ReceiverAudioStream::new(asr_audio_rx);
-            if let Err(e) = asr.stream(Box::new(audio_stream), asr_event_tx).await {
-                warn!("ASR task error: {}", e);
-            }
         }));
 
         // Orchestrator: consumes events, triggers agent/TTS, forwards to egress
@@ -186,6 +280,7 @@ impl PipelineSession {
             orch_token,
             llm,
             tts,
+            std::sync::Arc::clone(&failure_handler),
         );
         handles.push(tokio::spawn(async move {
             orchestrator.run().await;

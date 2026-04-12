@@ -302,3 +302,175 @@ async fn test_pipeline_terminate_cancels_active_tasks() {
     let frame = AudioFrame::silence(20, 0);
     assert!(audio_tx.send(frame).await.is_err());
 }
+
+// ── Provider failure tests ────────────────────────────────────────────────────
+//
+// These tests inject a failing stub for one component and verify the
+// ProviderFailureHandler is called with the correct component and error.
+// We use RecordingFailureHandler instead of PanicOnProviderError so the
+// test thread can assert on the recorded failure (cross-thread panics are
+// not caught by #[should_panic]).
+
+use std::sync::Mutex;
+
+/// Captures the first provider failure: (component_name, error_message).
+struct RecordingFailureHandler {
+    recorded: Arc<Mutex<Option<(String, String)>>>,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl common::error::ProviderFailureHandler for RecordingFailureHandler {
+    fn on_provider_failure(
+        &self,
+        component: common::types::Component,
+        error: &dyn std::error::Error,
+    ) {
+        let mut guard = self.recorded.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some((component.to_string(), error.to_string()));
+        }
+        self.notify.notify_waiters();
+    }
+}
+
+struct FailingAsrProvider;
+
+#[async_trait::async_trait]
+impl common::traits::AsrProvider for FailingAsrProvider {
+    async fn stream(
+        &self,
+        mut audio: Box<dyn common::traits::AudioInputStream>,
+        _tx: tokio::sync::mpsc::Sender<PipelineEvent>,
+    ) -> Result<(), common::error::AsrError> {
+        while audio.recv().await.is_some() {}
+        Err(common::error::AsrError::ConnectionFailed)
+    }
+}
+
+struct FailingLlmProvider;
+
+#[async_trait::async_trait]
+impl common::traits::LlmProvider for FailingLlmProvider {
+    async fn stream_completion(
+        &self,
+        _messages: &[common::types::Message],
+        _tools: &[common::types::ToolDefinition],
+        _tx: tokio::sync::mpsc::Sender<PipelineEvent>,
+    ) -> Result<(), common::error::LlmError> {
+        Err(common::error::LlmError::ConnectionFailed)
+    }
+
+    async fn cancel(&self) {}
+}
+
+struct FailingTtsProvider;
+
+#[async_trait::async_trait]
+impl common::traits::TtsProvider for FailingTtsProvider {
+    async fn synthesize(
+        &self,
+        mut text_rx: tokio::sync::mpsc::Receiver<String>,
+        _tx: tokio::sync::mpsc::Sender<PipelineEvent>,
+    ) -> Result<(), common::error::TtsError> {
+        while text_rx.recv().await.is_some() {}
+        Err(common::error::TtsError::ConnectionFailed)
+    }
+
+    async fn cancel(&self) {}
+}
+
+/// Helper: run the pipeline with voice frames and wait for the failure handler to fire.
+async fn run_until_failure(
+    asr: Arc<dyn common::traits::AsrProvider>,
+    llm: Arc<dyn common::traits::LlmProvider>,
+    tts: Arc<dyn common::traits::TtsProvider>,
+) -> (String, String) {
+    let config = default_config();
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
+    let (egress_tx, _egress_rx) = mpsc::channel::<PipelineEvent>(200);
+
+    let recorded: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    let notify = Arc::new(tokio::sync::Notify::new());
+
+    let handler = Arc::new(RecordingFailureHandler {
+        recorded: Arc::clone(&recorded),
+        notify: Arc::clone(&notify),
+    });
+
+    let _session = voicebot_core::session::PipelineSession::start_with_handler(
+        config, audio_rx, egress_tx, asr, llm, tts, handler,
+    )
+    .await
+    .expect("session start failed");
+
+    // Drive speech through the pipeline
+    for frame in make_speech_frames(25) {
+        audio_tx.send(frame).await.expect("send audio");
+    }
+    for frame in make_silence_frames(50, 25) {
+        audio_tx.send(frame).await.expect("send silence");
+    }
+    drop(audio_tx);
+
+    // Wait up to 10s for the handler to fire
+    timeout(Duration::from_secs(10), notify.notified())
+        .await
+        .expect("provider failure handler was not called within 10s");
+
+    let result = recorded.lock().unwrap().clone().unwrap();
+    result
+}
+
+/// ASR ConnectionFailed must invoke the failure handler with component "asr".
+#[tokio::test]
+async fn test_asr_provider_failure_is_handled() {
+    let (component, error) = run_until_failure(
+        Arc::new(FailingAsrProvider),
+        Arc::new(agent::stub::StubLlmProvider),
+        Arc::new(tts::stub::StubTtsProvider),
+    )
+    .await;
+
+    assert_eq!(component, "asr", "expected asr component, got: {component}");
+    assert!(
+        error.contains("connection") || error.contains("ASR"),
+        "unexpected error: {error}"
+    );
+}
+
+/// LLM ConnectionFailed must invoke the failure handler with component "agent".
+#[tokio::test]
+async fn test_llm_provider_failure_is_handled() {
+    let (component, error) = run_until_failure(
+        Arc::new(asr::stub::StubAsrProvider),
+        Arc::new(FailingLlmProvider),
+        Arc::new(tts::stub::StubTtsProvider),
+    )
+    .await;
+
+    assert_eq!(
+        component, "agent",
+        "expected agent component, got: {component}"
+    );
+    assert!(
+        error.contains("connection") || error.contains("LLM"),
+        "unexpected error: {error}"
+    );
+}
+
+/// TTS ConnectionFailed must invoke the failure handler with component "tts".
+#[tokio::test]
+async fn test_tts_provider_failure_is_handled() {
+    let (component, error) = run_until_failure(
+        Arc::new(asr::stub::StubAsrProvider),
+        Arc::new(agent::stub::StubLlmProvider),
+        Arc::new(FailingTtsProvider),
+    )
+    .await;
+
+    assert_eq!(component, "tts", "expected tts component, got: {component}");
+    assert!(
+        error.contains("connection") || error.contains("TTS"),
+        "unexpected error: {error}"
+    );
+}

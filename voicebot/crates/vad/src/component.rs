@@ -12,6 +12,8 @@ pub struct VadComponent {
     config: VadConfig,
     event_tx: Sender<PipelineEvent>,
     cancel_token: CancellationToken,
+    /// Optional side-channel for notifying a consumer when speech starts/ends.
+    speech_state_tx: Option<Sender<bool>>,
 }
 
 impl VadComponent {
@@ -24,7 +26,15 @@ impl VadComponent {
             config,
             event_tx,
             cancel_token,
+            speech_state_tx: None,
         }
+    }
+
+    /// Attach an mpsc sender that will receive `true` on SpeechStarted
+    /// and `false` on SpeechEnded. Use this to gate audio routing.
+    pub fn with_speech_state(mut self, tx: Sender<bool>) -> Self {
+        self.speech_state_tx = Some(tx);
+        self
     }
 
     pub async fn run(&mut self, mut audio: Box<dyn AudioInputStream>) {
@@ -72,6 +82,9 @@ impl VadComponent {
                 if !is_speaking && voiced_ms >= self.config.min_speech_ms {
                     is_speaking = true;
                     debug!(timestamp_ms = frame.timestamp_ms, "SpeechStarted");
+                    if let Some(ref tx) = self.speech_state_tx {
+                        let _ = tx.try_send(true);
+                    }
                     if let Err(e) = self
                         .event_tx
                         .send(PipelineEvent::SpeechStarted {
@@ -90,6 +103,9 @@ impl VadComponent {
                     is_speaking = false;
                     voiced_ms = 0;
                     debug!(timestamp_ms = frame.timestamp_ms, "SpeechEnded");
+                    if let Some(ref tx) = self.speech_state_tx {
+                        let _ = tx.try_send(false);
+                    }
                     if let Err(e) = self
                         .event_tx
                         .send(PipelineEvent::SpeechEnded {

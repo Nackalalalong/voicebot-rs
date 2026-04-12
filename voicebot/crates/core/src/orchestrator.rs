@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use agent::core::AgentCore;
+use common::error::{PanicOnProviderError, ProviderFailureHandler};
 use common::events::PipelineEvent;
 use common::traits::{LlmProvider, TtsProvider};
+use common::types::Component;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -29,6 +31,9 @@ pub struct Orchestrator {
     // Optional providers — when set, orchestrator triggers downstream components
     llm: Option<Arc<dyn LlmProvider>>,
     tts: Option<Arc<dyn TtsProvider>>,
+
+    // Error handler for provider failures
+    failure_handler: Arc<dyn ProviderFailureHandler>,
 
     // Active task handles for cancellation
     agent_handle: Option<JoinHandle<()>>,
@@ -60,6 +65,7 @@ impl Orchestrator {
             tts_handle: None,
             tts_text_tx: None,
             sentence_buffer: String::new(),
+            failure_handler: Arc::new(PanicOnProviderError),
         }
     }
 
@@ -72,6 +78,7 @@ impl Orchestrator {
         cancel_token: CancellationToken,
         llm: Arc<dyn LlmProvider>,
         tts: Arc<dyn TtsProvider>,
+        failure_handler: Arc<dyn ProviderFailureHandler>,
     ) -> Self {
         Self {
             state: OrchestratorState::Idle,
@@ -86,6 +93,7 @@ impl Orchestrator {
             tts_handle: None,
             tts_text_tx: None,
             sentence_buffer: String::new(),
+            failure_handler,
         }
     }
 
@@ -115,6 +123,29 @@ impl Orchestrator {
     }
 
     async fn handle_event(&mut self, event: PipelineEvent) {
+        // Structured debug for every component output (skip raw audio bytes)
+        match &event {
+            PipelineEvent::SpeechStarted { timestamp_ms } => {
+                debug!(session_id = %self.session_id, timestamp_ms, "VAD → SpeechStarted");
+            }
+            PipelineEvent::SpeechEnded { timestamp_ms } => {
+                debug!(session_id = %self.session_id, timestamp_ms, "VAD → SpeechEnded");
+            }
+            PipelineEvent::PartialTranscript { text, confidence } => {
+                debug!(session_id = %self.session_id, %text, confidence, "ASR → PartialTranscript");
+            }
+            PipelineEvent::FinalTranscript { text, language } => {
+                debug!(session_id = %self.session_id, %text, %language, "ASR → FinalTranscript");
+            }
+            PipelineEvent::TtsAudioChunk { sequence, .. } => {
+                debug!(session_id = %self.session_id, sequence, "TTS → TtsAudioChunk");
+            }
+            PipelineEvent::TtsComplete => {
+                debug!(session_id = %self.session_id, "TTS → TtsComplete");
+            }
+            _ => {}
+        }
+
         match (&self.state, &event) {
             // Valid transitions
             (OrchestratorState::Idle, PipelineEvent::SpeechStarted { .. }) => {
@@ -248,12 +279,25 @@ impl Orchestrator {
             return;
         };
         let cancel_token = self.cancel_token.child_token();
-        let session_id = self.session_id;
 
+        let failure_handler = Arc::clone(&self.failure_handler);
+        let session_id = self.session_id;
         self.agent_handle = Some(tokio::spawn(async move {
+            info!(session_id = %session_id, transcript = %transcript, "LLM provider call started");
             let mut agent = AgentCore::new(llm, vec![], None, cancel_token);
-            if let Err(e) = agent.handle_turn(transcript, event_tx).await {
-                warn!(session_id = %session_id, "agent error: {}", e);
+            let result = agent.handle_turn(transcript, event_tx).await;
+            match &result {
+                Ok(()) => info!(session_id = %session_id, "LLM provider call completed"),
+                Err(e) => warn!(session_id = %session_id, error = %e, "LLM provider call failed"),
+            }
+            if let Err(e) = result {
+                // Cancelled / channel closed means the session is tearing down — not a provider failure.
+                if !matches!(
+                    e,
+                    agent::error::AgentError::Cancelled | agent::error::AgentError::ChannelClosed
+                ) {
+                    failure_handler.on_provider_failure(Component::Agent, &e);
+                }
             }
         }));
     }
@@ -264,14 +308,27 @@ impl Orchestrator {
         let (Some(tts), Some(event_tx)) = (self.tts.clone(), self.event_tx.clone()) else {
             return;
         };
-        let session_id = self.session_id;
         let (text_tx, text_rx) = tokio::sync::mpsc::channel::<String>(20);
 
         self.tts_text_tx = Some(text_tx);
 
+        let failure_handler = Arc::clone(&self.failure_handler);
+        let session_id = self.session_id;
         self.tts_handle = Some(tokio::spawn(async move {
-            if let Err(e) = tts.synthesize(text_rx, event_tx).await {
-                warn!(session_id = %session_id, "TTS error: {}", e);
+            info!(session_id = %session_id, "TTS provider call started");
+            let result = tts.synthesize(text_rx, event_tx).await;
+            match &result {
+                Ok(()) => info!(session_id = %session_id, "TTS provider call completed"),
+                Err(e) => warn!(session_id = %session_id, error = %e, "TTS provider call failed"),
+            }
+            if let Err(e) = result {
+                // Cancelled / channel closed means the session is tearing down — not a provider failure.
+                if !matches!(
+                    e,
+                    common::error::TtsError::Cancelled | common::error::TtsError::ChannelClosed
+                ) {
+                    failure_handler.on_provider_failure(Component::Tts, &e);
+                }
             }
         }));
     }

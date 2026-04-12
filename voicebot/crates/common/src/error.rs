@@ -1,5 +1,31 @@
 use crate::types::Component;
+use std::sync::Arc;
 use thiserror::Error;
+
+/// Strategy for handling a provider failure.
+///
+/// Implement this trait to control what happens when ASR, LLM, or TTS encounters
+/// an unrecoverable error. Use [`PanicOnProviderError`] to fail fast during development.
+pub trait ProviderFailureHandler: Send + Sync + 'static {
+    fn on_provider_failure(&self, component: Component, error: &dyn std::error::Error);
+}
+
+/// [`ProviderFailureHandler`] that panics immediately on any provider error.
+///
+/// Use this during development so failures are impossible to miss.
+pub struct PanicOnProviderError;
+
+impl ProviderFailureHandler for PanicOnProviderError {
+    fn on_provider_failure(&self, component: Component, error: &dyn std::error::Error) {
+        panic!("Provider failure [{}]: {}", component, error);
+    }
+}
+
+impl<T: ProviderFailureHandler> ProviderFailureHandler for Arc<T> {
+    fn on_provider_failure(&self, component: Component, error: &dyn std::error::Error) {
+        (**self).on_provider_failure(component, error);
+    }
+}
 
 /// Trait that all component errors must implement.
 pub trait ComponentErrorTrait: std::error::Error + Send + Sync {
