@@ -18,6 +18,8 @@ const vuBar = document.getElementById('vu-bar');
 // State
 let ws = null;
 let audioCtx = null;
+let playbackCtx = null;
+let playbackNode = null;
 let micStream = null;
 let processor = null;
 let micActive = false;
@@ -27,10 +29,13 @@ let currentUserMsg = null; // accumulates streaming transcript
 // TTS audio accumulation for the current bot response
 let currentTtsChunks = []; // Array<ArrayBuffer> of raw PCM i16 LE chunks
 
-// Streaming playback scheduler (gapless via audioCtx.currentTime)
-let pendingChunks = []; // chunks not yet scheduled
-let scheduledUntil = 0; // audioCtx time up to which audio is already scheduled
-let prebufferFull = false;
+// Streaming playback queue for TTS PCM
+let playbackQueue = []; // Array<Float32Array>
+let playbackQueueOffset = 0;
+let playbackQueuedSamples = 0;
+let playbackPrimed = false;
+let playbackStreamOpen = false;
+const PLAYBACK_BUFFER_SIZE = 2048;
 const PREBUFFER_MS = 400; // accumulate 400ms before starting to avoid underruns
 
 // --- Status ---
@@ -69,6 +74,69 @@ function updateMessageText(msgEl, text, isPartial) {
     content.className = isPartial ? 'partial' : '';
 }
 
+function ensurePlaybackEngine() {
+    if (!playbackCtx) {
+        playbackCtx = new AudioContext({sampleRate: SAMPLE_RATE});
+    }
+
+    if (!playbackNode) {
+        playbackNode = playbackCtx.createScriptProcessor(PLAYBACK_BUFFER_SIZE, 0, 1);
+        playbackNode.onaudioprocess = (event) => {
+            const output = event.outputBuffer.getChannelData(0);
+            output.fill(0);
+
+            if (!playbackPrimed) return;
+
+            let writeOffset = 0;
+            while (writeOffset < output.length && playbackQueue.length > 0) {
+                const chunk = playbackQueue[0];
+                const remaining = chunk.length - playbackQueueOffset;
+                const copyCount = Math.min(output.length - writeOffset, remaining);
+
+                output.set(
+                    chunk.subarray(playbackQueueOffset, playbackQueueOffset + copyCount),
+                    writeOffset,
+                );
+
+                writeOffset += copyCount;
+                playbackQueueOffset += copyCount;
+                playbackQueuedSamples -= copyCount;
+
+                if (playbackQueueOffset >= chunk.length) {
+                    playbackQueue.shift();
+                    playbackQueueOffset = 0;
+                }
+            }
+
+            if (playbackQueuedSamples === 0 && !playbackStreamOpen) {
+                playbackPrimed = false;
+            }
+        };
+        playbackNode.connect(playbackCtx.destination);
+    }
+
+    if (playbackCtx.state === 'suspended') {
+        void playbackCtx.resume().catch(() => {});
+    }
+}
+
+function pcm16ToFloat32(arrayBuffer) {
+    const i16 = new Int16Array(arrayBuffer);
+    const floats = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) {
+        floats[i] = i16[i] / 32768;
+    }
+    return floats;
+}
+
+function resetPlaybackQueue() {
+    playbackQueue = [];
+    playbackQueueOffset = 0;
+    playbackQueuedSamples = 0;
+    playbackPrimed = false;
+    playbackStreamOpen = false;
+}
+
 // --- WebSocket ---
 function connect() {
     if (ws) {
@@ -81,6 +149,7 @@ function connect() {
 
     setStatus('connecting', 'Connecting...');
     if (!audioCtx) audioCtx = new AudioContext();
+    ensurePlaybackEngine();
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
 
@@ -117,6 +186,7 @@ function connect() {
         btnConnect.classList.remove('active');
         btnMic.disabled = true;
         stopMic();
+        resetPlaybackQueue();
         ws = null;
     };
 
@@ -130,6 +200,7 @@ function disconnect() {
         ws.send(JSON.stringify({type: 'session_end'}));
         ws.close();
     }
+    resetPlaybackQueue();
 }
 
 function handleServerText(msg) {
@@ -158,9 +229,7 @@ function handleServerText(msg) {
                 currentBotMsg = addMessage('bot', msg.text, true);
                 currentBotMsg._fullText = msg.text;
                 currentTtsChunks = [];
-                pendingChunks = [];
-                scheduledUntil = 0;
-                prebufferFull = false;
+                playbackStreamOpen = true;
             } else {
                 currentBotMsg._fullText += msg.text;
                 updateMessageText(currentBotMsg, currentBotMsg._fullText, true);
@@ -178,6 +247,7 @@ function handleServerText(msg) {
             break;
 
         case 'tts_complete':
+            playbackStreamOpen = false;
             flushPendingAudio();
             finalizeTtsAudio(currentBotMsg, currentTtsChunks);
             currentBotMsg = null;
@@ -196,53 +266,24 @@ function handleServerText(msg) {
 // --- Audio playback ---
 function handleServerAudio(arrayBuffer) {
     currentTtsChunks.push(arrayBuffer);
-    pendingChunks.push(arrayBuffer);
+    ensurePlaybackEngine();
 
-    if (!audioCtx) audioCtx = new AudioContext({sampleRate: SAMPLE_RATE});
+    const floats = pcm16ToFloat32(arrayBuffer);
+    playbackQueue.push(floats);
+    playbackQueuedSamples += floats.length;
+    playbackStreamOpen = true;
 
-    if (!prebufferFull) {
-        const pendingMs =
-            (pendingChunks.reduce((n, b) => n + b.byteLength, 0) / (SAMPLE_RATE * 2)) * 1000;
-        if (pendingMs >= PREBUFFER_MS) prebufferFull = true;
-    }
-
-    if (prebufferFull) schedulePending();
-}
-
-function schedulePending() {
-    if (!audioCtx || pendingChunks.length === 0) return;
-
-    // If we've fallen behind real time (e.g. first chunk), re-anchor
-    if (scheduledUntil < audioCtx.currentTime + 0.01) {
-        scheduledUntil = audioCtx.currentTime + 0.05;
-    }
-
-    while (pendingChunks.length > 0) {
-        const buf = pendingChunks.shift();
-        const i16 = new Int16Array(buf);
-        const floats = new Float32Array(i16.length);
-        for (let i = 0; i < i16.length; i++) floats[i] = i16[i] / 32768;
-
-        const audioBuf = audioCtx.createBuffer(1, floats.length, SAMPLE_RATE);
-        audioBuf.getChannelData(0).set(floats);
-
-        const src = audioCtx.createBufferSource();
-        src.buffer = audioBuf;
-        src.connect(audioCtx.destination);
-        src.start(scheduledUntil);
-        scheduledUntil += audioBuf.duration;
+    const pendingMs = (playbackQueuedSamples / SAMPLE_RATE) * 1000;
+    if (!playbackPrimed && pendingMs >= PREBUFFER_MS) {
+        playbackPrimed = true;
     }
 }
 
 // Flush any chunks that didn't reach the pre-buffer threshold (last sentence).
 function flushPendingAudio() {
-    if (!audioCtx) return;
-    prebufferFull = true;
-    schedulePending();
-    // Reset scheduler state for next response
-    scheduledUntil = 0;
-    prebufferFull = false;
-    pendingChunks = [];
+    if (playbackQueuedSamples > 0) {
+        playbackPrimed = true;
+    }
 }
 
 // Build a WAV file from raw PCM i16 LE chunks and attach an <audio> player

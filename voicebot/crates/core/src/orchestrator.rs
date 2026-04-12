@@ -225,6 +225,13 @@ impl Orchestrator {
                 return;
             }
 
+            // Sentence-boundary TTS can begin emitting audio before the LLM sends
+            // AgentFinalResponse, so forward chunks immediately instead of dropping them.
+            (OrchestratorState::AgentThinking, PipelineEvent::TtsAudioChunk { .. }) => {
+                let _ = self.egress_tx.send(event).await;
+                return;
+            }
+
             // Forward TTS audio while speaking
             (OrchestratorState::Speaking, PipelineEvent::TtsAudioChunk { .. }) => {
                 let _ = self.egress_tx.send(event).await;
@@ -467,6 +474,7 @@ impl Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::audio::AudioFrame;
     use std::time::Duration;
     use tokio::time::timeout;
 
@@ -539,6 +547,76 @@ mod tests {
             .await
             .expect("orchestrator timed out");
 
+        assert_eq!(orch.state(), OrchestratorState::Idle);
+        cancel_token.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_tts_audio_is_forwarded_before_agent_final() {
+        let (mut orch, event_tx, mut egress_rx, cancel_token) = create_orchestrator().await;
+
+        event_tx
+            .send(PipelineEvent::SpeechStarted { timestamp_ms: 0 })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::SpeechEnded { timestamp_ms: 500 })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::FinalTranscript {
+                text: "hello".into(),
+                language: "en".into(),
+            })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::AgentPartialResponse {
+                text: "Hello!".into(),
+            })
+            .await
+            .expect("send failed");
+
+        let expected_frame = AudioFrame::new(vec![1i16; 320], 0);
+        event_tx
+            .send(PipelineEvent::TtsAudioChunk {
+                frame: expected_frame.clone(),
+                sequence: 0,
+            })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::AgentFinalResponse {
+                text: "Hello! How are you?".into(),
+                tool_calls: vec![],
+            })
+            .await
+            .expect("send failed");
+        event_tx
+            .send(PipelineEvent::TtsComplete)
+            .await
+            .expect("send failed");
+        drop(event_tx);
+
+        timeout(Duration::from_secs(2), orch.run())
+            .await
+            .expect("orchestrator timed out");
+
+        let mut saw_early_tts = false;
+        while let Ok(event) = egress_rx.try_recv() {
+            if let PipelineEvent::TtsAudioChunk { frame, sequence } = event {
+                assert_eq!(sequence, 0);
+                assert_eq!(frame.num_samples(), expected_frame.num_samples());
+                assert_eq!(&*frame.data, &*expected_frame.data);
+                saw_early_tts = true;
+                break;
+            }
+        }
+
+        assert!(
+            saw_early_tts,
+            "expected TTS audio before AgentFinalResponse"
+        );
         assert_eq!(orch.state(), OrchestratorState::Idle);
         cancel_token.cancel();
     }
