@@ -114,8 +114,8 @@ impl TtsProvider for SpeachesTtsProvider {
 
                 // Emit complete 20ms frames
                 while pcm_buf.len() >= frame_bytes {
-                    let frame_data: Vec<u8> = pcm_buf.drain(..frame_bytes).collect();
-                    let frame = AudioFrame::from_pcm_bytes(&frame_data, 0);
+                    let frame = AudioFrame::from_pcm_bytes(&pcm_buf[..frame_bytes], 0);
+                    pcm_buf.drain(..frame_bytes);
                     tx.send(PipelineEvent::TtsAudioChunk { frame, sequence })
                         .await
                         .map_err(|_| TtsError::ChannelClosed)?;

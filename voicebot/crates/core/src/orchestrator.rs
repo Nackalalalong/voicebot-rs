@@ -339,23 +339,29 @@ impl Orchestrator {
         let Some(tx) = &self.tts_text_tx else { return };
 
         loop {
-            // Find the earliest sentence-ending punctuation followed by whitespace
-            let boundary = self
-                .sentence_buffer
-                .char_indices()
-                .zip(self.sentence_buffer.chars().skip(1))
-                .find(|((_, c), next)| {
-                    (*c == '.' || *c == '!' || *c == '?' || *c == '\n') && next.is_whitespace()
-                })
-                .map(|((i, c), _)| i + c.len_utf8());
+            // Single-pass byte scan: all sentence-ending chars are ASCII (single byte)
+            let boundary = {
+                let b = self.sentence_buffer.as_bytes();
+                let mut found = None;
+                for i in 0..b.len().saturating_sub(1) {
+                    if (b[i] == b'.' || b[i] == b'!' || b[i] == b'?' || b[i] == b'\n')
+                        && (b[i + 1] == b' ' || b[i + 1] == b'\t' || b[i + 1] == b'\n')
+                    {
+                        found = Some(i + 1);
+                        break;
+                    }
+                }
+                found
+            };
 
             match boundary {
                 Some(pos) => {
-                    let sentence: String = self.sentence_buffer.drain(..pos).collect();
-                    let trimmed = sentence.trim();
+                    // Slice before draining — one allocation, no intermediate String
+                    let trimmed = self.sentence_buffer[..pos].trim().to_owned();
+                    self.sentence_buffer.drain(..pos);
                     if !trimmed.is_empty() {
                         debug!(session_id = %self.session_id, sentence = %trimmed, "sending sentence to TTS");
-                        if tx.send(trimmed.to_string()).await.is_err() {
+                        if tx.send(trimmed).await.is_err() {
                             warn!(session_id = %self.session_id, "TTS text channel closed");
                             self.tts_text_tx = None;
                             return;
@@ -369,11 +375,13 @@ impl Orchestrator {
 
     /// Flush any remaining text in the buffer (called on AgentFinalResponse).
     async fn flush_remaining(&mut self) {
-        let trimmed = self.sentence_buffer.trim().to_string();
+        // Trim first, clone only when non-empty (avoids alloc on silence)
+        let trimmed = self.sentence_buffer.trim();
         if !trimmed.is_empty() {
+            let owned = trimmed.to_owned();
             if let Some(tx) = &self.tts_text_tx {
-                debug!(session_id = %self.session_id, sentence = %trimmed, "flushing remaining text to TTS");
-                if tx.send(trimmed).await.is_err() {
+                debug!(session_id = %self.session_id, sentence = %owned, "flushing remaining text to TTS");
+                if tx.send(owned).await.is_err() {
                     warn!(session_id = %self.session_id, "TTS text channel closed");
                 }
             }

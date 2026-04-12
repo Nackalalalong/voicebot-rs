@@ -3,7 +3,7 @@ pub fn rms_energy(samples: &[i16]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-    let sum_sq: f64 = samples.iter().map(|&s| (s as f64).powi(2)).sum();
+    let sum_sq: f64 = samples.iter().map(|&s| { let v = s as f64; v * v }).sum();
     ((sum_sq / samples.len() as f64).sqrt() / i16::MAX as f64) as f32
 }
 
@@ -34,6 +34,16 @@ impl FrameChunker {
             chunks.push(self.buffer.drain(..self.chunk_size).collect());
         }
         chunks
+    }
+
+    /// Push samples and invoke `callback` for each complete chunk without
+    /// allocating intermediate `Vec`s.
+    pub fn push_with<F: FnMut(&[i16])>(&mut self, samples: &[i16], mut callback: F) {
+        self.buffer.extend_from_slice(samples);
+        while self.buffer.len() >= self.chunk_size {
+            callback(&self.buffer[..self.chunk_size]);
+            self.buffer.drain(..self.chunk_size);
+        }
     }
 }
 

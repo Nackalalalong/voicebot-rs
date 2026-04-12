@@ -175,18 +175,13 @@ pub fn load_config(path: &str) -> Result<AppConfig, ConfigError> {
 /// Replace all `${VAR_NAME}` patterns with environment variable values.
 fn substitute_env_vars(input: &str) -> Result<String, ConfigError> {
     let re = regex::Regex::new(r"\$\{([^}]+)\}").expect("valid regex");
-    let mut result = input.to_string();
     let mut missing = Vec::new();
 
+    // First pass: collect any missing variables
     for cap in re.captures_iter(input) {
         let var_name = &cap[1];
-        match std::env::var(var_name) {
-            Ok(value) => {
-                result = result.replace(&cap[0], &value);
-            }
-            Err(_) => {
-                missing.push(var_name.to_string());
-            }
+        if std::env::var(var_name).is_err() {
+            missing.push(var_name.to_string());
         }
     }
 
@@ -194,7 +189,19 @@ fn substitute_env_vars(input: &str) -> Result<String, ConfigError> {
         return Err(ConfigError::MissingEnvVars(missing));
     }
 
-    Ok(result)
+    // Single-pass build: walk captures in order, copy literal spans + substituted values
+    let mut output = String::with_capacity(input.len());
+    let mut last_end = 0;
+    for cap in re.captures_iter(input) {
+        let m = cap.get(0).expect("full match always present");
+        let value = std::env::var(&cap[1]).expect("checked above");
+        output.push_str(&input[last_end..m.start()]);
+        output.push_str(&value);
+        last_end = m.end();
+    }
+    output.push_str(&input[last_end..]);
+
+    Ok(output)
 }
 
 /// Validate configuration for consistency.

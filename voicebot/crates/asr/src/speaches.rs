@@ -130,7 +130,7 @@ impl AsrProvider for SpeachesAsrProvider {
         // Collect all audio frames until the stream ends
         let mut pcm_bytes: Vec<u8> = Vec::new();
         while let Some(frame) = audio.recv().await {
-            pcm_bytes.extend_from_slice(&frame.to_pcm_bytes());
+            frame.append_pcm_bytes_to(&mut pcm_bytes);
         }
         tracing::debug!(
             bytes = pcm_bytes.len(),

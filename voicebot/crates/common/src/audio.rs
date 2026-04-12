@@ -57,6 +57,15 @@ impl AudioFrame {
             .flat_map(|s| s.to_le_bytes())
             .collect()
     }
+
+    /// Append PCM bytes (little-endian i16) directly into an existing buffer.
+    /// Avoids allocating a transient `Vec<u8>` in hot audio paths.
+    pub fn append_pcm_bytes_to(&self, buf: &mut Vec<u8>) {
+        buf.reserve(self.data.len() * 2);
+        for &s in &*self.data {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+    }
 }
 
 #[cfg(test)]

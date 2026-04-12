@@ -1,27 +1,25 @@
-use std::collections::VecDeque;
-
 use common::types::{Message, Role};
 
 pub struct ConversationMemory {
-    messages: VecDeque<Message>,
+    messages: Vec<Message>,
     max_turns: usize,
 }
 
 impl ConversationMemory {
     pub fn new(max_turns: usize) -> Self {
         Self {
-            messages: VecDeque::new(),
+            messages: Vec::new(),
             max_turns,
         }
     }
 
     pub fn push(&mut self, msg: Message) {
-        self.messages.push_back(msg);
+        self.messages.push(msg);
         // Trim oldest, but keep system message at index 0
         while self.messages.len() > self.max_turns * 2 {
             if self
                 .messages
-                .front()
+                .first()
                 .map_or(false, |m| m.role == Role::System)
             {
                 if self.messages.len() > 1 {
@@ -30,13 +28,14 @@ impl ConversationMemory {
                     break;
                 }
             } else {
-                self.messages.pop_front();
+                self.messages.remove(0);
             }
         }
     }
 
-    pub fn messages(&self) -> Vec<Message> {
-        self.messages.iter().cloned().collect()
+    /// Borrow the full message history as a slice (no allocation).
+    pub fn as_slice(&self) -> &[Message] {
+        &self.messages
     }
 
     pub fn clear(&mut self) {
@@ -53,7 +52,7 @@ mod tests {
         let mut mem = ConversationMemory::new(5);
         mem.push(Message::user("hello"));
         mem.push(Message::assistant("hi"));
-        assert_eq!(mem.messages().len(), 2);
+        assert_eq!(mem.as_slice().len(), 2);
     }
 
     #[test]
@@ -63,7 +62,7 @@ mod tests {
         for i in 0..6 {
             mem.push(Message::user(&format!("msg {}", i)));
         }
-        assert!(mem.messages().len() <= 4);
+        assert!(mem.as_slice().len() <= 4);
     }
 
     #[test]
@@ -73,7 +72,7 @@ mod tests {
         for i in 0..10 {
             mem.push(Message::user(&format!("msg {}", i)));
         }
-        let msgs = mem.messages();
+        let msgs = mem.as_slice();
         assert_eq!(msgs[0].role, Role::System);
     }
 
@@ -82,6 +81,6 @@ mod tests {
         let mut mem = ConversationMemory::new(5);
         mem.push(Message::user("hello"));
         mem.clear();
-        assert!(mem.messages().is_empty());
+        assert!(mem.as_slice().is_empty());
     }
 }

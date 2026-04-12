@@ -48,6 +48,10 @@ impl AgentCore {
 
         let mut iterations = 0;
 
+        // Build tool definitions once — wrap in Arc so only the refcount is cloned per loop iteration
+        let tool_defs: Arc<Vec<ToolDefinition>> =
+            Arc::new(self.tools.iter().map(|t| t.definition()).collect());
+
         loop {
             if iterations >= MAX_TOOL_ITERATIONS {
                 tracing::warn!("max tool iterations reached");
@@ -56,15 +60,14 @@ impl AgentCore {
 
             // Stream completion from LLM
             let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<PipelineEvent>(20);
-            let messages = self.memory.messages();
-            let tool_defs: Vec<ToolDefinition> =
-                self.tools.iter().map(|t| t.definition()).collect();
+            let messages = self.memory.as_slice().to_vec();
+            let tool_defs = Arc::clone(&tool_defs);
 
             let llm = self.llm.clone();
             let llm_token = self.cancel_token.child_token();
             let llm_handle = tokio::spawn(async move {
                 tokio::select! {
-                    result = llm.stream_completion(&messages, &tool_defs, response_tx) => result,
+                    result = llm.stream_completion(&messages, tool_defs.as_slice(), response_tx) => result,
                     _ = llm_token.cancelled() => Err(LlmError::Cancelled),
                 }
             });

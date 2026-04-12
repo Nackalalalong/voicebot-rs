@@ -146,10 +146,12 @@ impl LlmProvider for OpenAiProvider {
             let text = String::from_utf8_lossy(&chunk);
             line_buffer.push_str(&text);
 
-            // Process complete lines
-            while let Some(newline_pos) = line_buffer.find('\n') {
-                let line = line_buffer[..newline_pos].trim().to_string();
-                line_buffer = line_buffer[newline_pos + 1..].to_string();
+            // Process complete lines — index-based to avoid a String allocation per newline
+            let mut consumed = 0;
+            while let Some(rel) = line_buffer[consumed..].find('\n') {
+                let abs = consumed + rel;
+                let line = line_buffer[consumed..abs].trim();
+                consumed = abs + 1;
 
                 if line.is_empty() || !line.starts_with("data: ") {
                     continue;
@@ -210,6 +212,8 @@ impl LlmProvider for OpenAiProvider {
                     }
                 }
             }
+            // Drop the processed prefix in one O(remaining) pass per HTTP chunk
+            line_buffer.drain(..consumed);
         }
 
         // Build final tool calls
