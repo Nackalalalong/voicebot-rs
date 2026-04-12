@@ -46,22 +46,37 @@ pub enum PipelineEvent {
     Audio(AudioFrame),
 
     // VAD
-    SpeechStarted { timestamp_ms: u64 },
-    SpeechEnded { timestamp_ms: u64 },
+    SpeechStarted {
+        timestamp_ms: u64,
+    },
+    SpeechEnded {
+        timestamp_ms: u64,
+    },
 
     // ASR
-    PartialTranscript { text: String, confidence: f32 },
-    FinalTranscript { text: String, language: String },
+    PartialTranscript {
+        text: String,
+        confidence: f32,
+    },
+    FinalTranscript {
+        text: String,
+        language: String,
+    },
 
     // Agent
-    AgentPartialResponse { text: String },
+    AgentPartialResponse {
+        text: String,
+    },
     AgentFinalResponse {
         text: String,
         tool_calls: Vec<ToolCall>,
     },
 
     // TTS
-    TtsAudioChunk { frame: AudioFrame, sequence: u32 },
+    TtsAudioChunk {
+        frame: AudioFrame,
+        sequence: u32,
+    },
     TtsComplete,
 
     // Control signals

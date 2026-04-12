@@ -80,9 +80,7 @@ impl AgentCore {
                 match event {
                     PipelineEvent::AgentPartialResponse { text } => {
                         full_text.push_str(&text);
-                        let _ = tx
-                            .send(PipelineEvent::AgentPartialResponse { text })
-                            .await;
+                        let _ = tx.send(PipelineEvent::AgentPartialResponse { text }).await;
                     }
                     PipelineEvent::AgentFinalResponse {
                         text,
@@ -119,22 +117,21 @@ impl AgentCore {
             self.memory
                 .push(Message::assistant_with_tool_calls(&full_text, &tool_calls));
             for tc in &tool_calls {
-                let result = if let Some(tool) =
-                    self.tools.iter().find(|t| t.name() == tc.function.name)
-                {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        tool.execute(tc.function.arguments.clone()),
-                    )
-                    .await
-                    {
-                        Ok(Ok(r)) => r,
-                        Ok(Err(e)) => format!("Tool error: {}", e),
-                        Err(_) => "Tool execution timed out".into(),
-                    }
-                } else {
-                    format!("Unknown tool: {}", tc.function.name)
-                };
+                let result =
+                    if let Some(tool) = self.tools.iter().find(|t| t.name() == tc.function.name) {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(30),
+                            tool.execute(tc.function.arguments.clone()),
+                        )
+                        .await
+                        {
+                            Ok(Ok(r)) => r,
+                            Ok(Err(e)) => format!("Tool error: {}", e),
+                            Err(_) => "Tool execution timed out".into(),
+                        }
+                    } else {
+                        format!("Unknown tool: {}", tc.function.name)
+                    };
                 self.memory.push(Message::tool_result(&tc.id, &result));
             }
 
