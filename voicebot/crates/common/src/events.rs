@@ -35,6 +35,8 @@ pub struct SessionConfig {
     pub tts_provider: TtsProviderType,
     pub llm_provider: LlmProviderType,
     pub vad_config: VadConfig,
+    /// Optional system prompt sent to the LLM at the start of every session.
+    pub system_prompt: Option<String>,
 }
 
 /// All pipeline events flowing through the system.

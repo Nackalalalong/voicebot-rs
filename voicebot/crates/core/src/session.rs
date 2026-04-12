@@ -281,6 +281,7 @@ impl PipelineSession {
             llm,
             tts,
             std::sync::Arc::clone(&failure_handler),
+            config.system_prompt.clone(),
         );
         handles.push(tokio::spawn(async move {
             orchestrator.run().await;

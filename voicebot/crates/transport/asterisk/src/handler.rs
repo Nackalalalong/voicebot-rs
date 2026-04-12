@@ -229,6 +229,7 @@ async fn handle_stasis_start(
         tts_provider: TtsProviderType::from_str_loose(&defaults.tts_provider),
         llm_provider: LlmProviderType::from_str_loose(&defaults.llm_provider),
         vad_config: app_config.vad.clone(),
+        system_prompt: None,
     };
 
     // 8. Start the pipeline session.

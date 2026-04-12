@@ -39,6 +39,7 @@ async fn test_pipeline_vad_detects_speech() {
         tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
+        system_prompt: None,
     };
 
     let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
@@ -86,6 +87,7 @@ async fn test_session_starts_and_terminates() {
         tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
+        system_prompt: None,
     };
 
     let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
@@ -116,6 +118,7 @@ async fn test_session_terminate_is_idempotent() {
         tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
+        system_prompt: None,
     };
 
     let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
@@ -161,6 +164,7 @@ fn default_config() -> SessionConfig {
         tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
+        system_prompt: None,
     }
 }
 

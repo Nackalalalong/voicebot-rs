@@ -124,6 +124,7 @@ async fn wait_for_session_start(
                         tts_provider: TtsProviderType::from_str_loose(&tts),
                         llm_provider: LlmProviderType::OpenAi,
                         vad_config: VadConfig::default(),
+                        system_prompt: None,
                     });
                 }
                 Ok(_) => {

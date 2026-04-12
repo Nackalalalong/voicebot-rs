@@ -6,6 +6,7 @@ use common::events::PipelineEvent;
 use common::traits::{LlmProvider, TtsProvider};
 use common::types::Component;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -29,8 +30,11 @@ pub struct Orchestrator {
     cancel_token: CancellationToken,
 
     // Optional providers — when set, orchestrator triggers downstream components
-    llm: Option<Arc<dyn LlmProvider>>,
     tts: Option<Arc<dyn TtsProvider>>,
+
+    // Persistent agent — lives for the session so ConversationMemory is preserved across turns.
+    // Wrapped in Arc<Mutex> so it can be moved into spawned tasks while being owned here.
+    agent: Option<Arc<Mutex<AgentCore>>>,
 
     // Error handler for provider failures
     failure_handler: Arc<dyn ProviderFailureHandler>,
@@ -59,8 +63,8 @@ impl Orchestrator {
             event_tx: None,
             egress_tx,
             cancel_token,
-            llm: None,
             tts: None,
+            agent: None,
             agent_handle: None,
             tts_handle: None,
             tts_text_tx: None,
@@ -79,7 +83,9 @@ impl Orchestrator {
         llm: Arc<dyn LlmProvider>,
         tts: Arc<dyn TtsProvider>,
         failure_handler: Arc<dyn ProviderFailureHandler>,
+        system_prompt: Option<String>,
     ) -> Self {
+        let agent = AgentCore::new(llm, vec![], system_prompt, CancellationToken::new());
         Self {
             state: OrchestratorState::Idle,
             session_id,
@@ -87,8 +93,8 @@ impl Orchestrator {
             event_tx: Some(event_tx),
             egress_tx,
             cancel_token,
-            llm: Some(llm),
             tts: Some(tts),
+            agent: Some(Arc::new(Mutex::new(agent))),
             agent_handle: None,
             tts_handle: None,
             tts_text_tx: None,
@@ -213,6 +219,15 @@ impl Orchestrator {
                 return;
             }
 
+            // Barge-in: user starts speaking while LLM is generating → cancel and listen
+            (OrchestratorState::AgentThinking, PipelineEvent::SpeechStarted { .. }) => {
+                info!(session_id = %self.session_id, "barge-in during agent thinking, interrupting LLM");
+                self.cancel_active_tasks();
+                crate::observability::record_interrupt();
+                self.state = OrchestratorState::Listening;
+                return;
+            }
+
             // Barge-in: user starts speaking during TTS playback → interrupt
             (OrchestratorState::Speaking, PipelineEvent::SpeechStarted { .. }) => {
                 info!(session_id = %self.session_id, "barge-in during speaking, interrupting TTS");
@@ -273,18 +288,24 @@ impl Orchestrator {
         }
     }
 
-    /// Spawn an agent task to handle the transcript (only if LLM provider is configured).
+    /// Spawn an agent task to handle the transcript.
+    /// Reuses the session-level AgentCore so ConversationMemory is preserved across turns.
     fn trigger_agent(&mut self, transcript: String) {
-        let (Some(llm), Some(event_tx)) = (self.llm.clone(), self.event_tx.clone()) else {
+        let (Some(agent_arc), Some(event_tx)) = (self.agent.clone(), self.event_tx.clone()) else {
             return;
         };
+        // Per-turn cancellation token — cancelling this aborts the LLM call
+        // without touching other session-level state.
         let cancel_token = self.cancel_token.child_token();
 
         let failure_handler = Arc::clone(&self.failure_handler);
         let session_id = self.session_id;
         self.agent_handle = Some(tokio::spawn(async move {
             info!(session_id = %session_id, transcript = %transcript, "LLM provider call started");
-            let mut agent = AgentCore::new(llm, vec![], None, cancel_token);
+            let mut agent = agent_arc.lock().await;
+            // Replace the agent's cancellation token with this turn's token
+            // so barge-in can cancel only the current LLM call.
+            agent.set_cancel_token(cancel_token);
             let result = agent.handle_turn(transcript, event_tx).await;
             match &result {
                 Ok(()) => info!(session_id = %session_id, "LLM provider call completed"),

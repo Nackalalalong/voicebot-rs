@@ -102,6 +102,7 @@ async fn test_pipeline_with_speaches_providers() {
         tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
+        system_prompt: None,
     };
 
     let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
@@ -162,6 +163,7 @@ async fn test_build_providers_speaches() {
         tts_provider: TtsProviderType::Speaches,
         llm_provider: LlmProviderType::OpenAi,
         vad_config: VadConfig::default(),
+        system_prompt: None,
     };
 
     let (asr, _llm, _tts) = voicebot_core::session::build_providers(&app_config, &session_config)

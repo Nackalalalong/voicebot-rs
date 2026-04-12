@@ -52,10 +52,7 @@ impl AudioFrame {
 
     /// Convert to raw PCM bytes (little-endian i16).
     pub fn to_pcm_bytes(&self) -> Vec<u8> {
-        self.data
-            .iter()
-            .flat_map(|s| s.to_le_bytes())
-            .collect()
+        self.data.iter().flat_map(|s| s.to_le_bytes()).collect()
     }
 
     /// Append PCM bytes (little-endian i16) directly into an existing buffer.

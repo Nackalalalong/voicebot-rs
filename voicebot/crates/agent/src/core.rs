@@ -147,4 +147,11 @@ impl AgentCore {
     pub fn memory(&self) -> &ConversationMemory {
         &self.memory
     }
+
+    /// Replace the cancellation token used for the next LLM call.
+    /// Called by the orchestrator before each turn so barge-in cancels only
+    /// the current LLM request, not the whole session.
+    pub fn set_cancel_token(&mut self, token: CancellationToken) {
+        self.cancel_token = token;
+    }
 }
