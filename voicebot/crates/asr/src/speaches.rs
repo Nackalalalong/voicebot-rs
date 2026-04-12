@@ -38,11 +38,34 @@ impl SpeachesAsrProvider {
         self
     }
 
+    /// Wrap raw PCM i16 LE samples in a WAV container (16kHz mono 16-bit).
+    fn wrap_wav(pcm_bytes: &[u8]) -> Vec<u8> {
+        let data_len = pcm_bytes.len() as u32;
+        let file_len = 36 + data_len;
+        let mut buf = Vec::with_capacity(44 + pcm_bytes.len());
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&file_len.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+        buf.extend_from_slice(&16000u32.to_le_bytes()); // sample rate
+        buf.extend_from_slice(&32000u32.to_le_bytes()); // byte rate (16000 * 1 * 2)
+        buf.extend_from_slice(&2u16.to_le_bytes()); // block align
+        buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_len.to_le_bytes());
+        buf.extend_from_slice(pcm_bytes);
+        buf
+    }
+
     /// Build the multipart form from collected PCM bytes.
     fn build_form(&self, pcm_bytes: Vec<u8>, streaming: bool) -> Result<multipart::Form, AsrError> {
-        let file_part = multipart::Part::bytes(pcm_bytes)
-            .file_name("audio.pcm")
-            .mime_str("audio/L16;rate=16000;channels=1")
+        let wav_bytes = Self::wrap_wav(&pcm_bytes);
+        let file_part = multipart::Part::bytes(wav_bytes)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
             .map_err(|e| AsrError::InvalidResponse(format!("mime error: {e}")))?;
 
         let mut form = multipart::Form::new()

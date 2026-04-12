@@ -2,8 +2,18 @@ use common::audio::AudioFrame;
 use common::events::PipelineEvent;
 use common::traits::{AsrProvider, AudioInputStream};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// Resolve a fixture path relative to the workspace root.
+fn fixture_path(relative: &str) -> String {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.pop(); // crates
+    p.pop(); // voicebot root
+    p.push(relative);
+    p.to_string_lossy().into_owned()
+}
 
 /// Simple audio stream from raw PCM bytes.
 struct WavAudioStream {
@@ -87,7 +97,8 @@ async fn test_speaches_asr_transcribes_audio() {
 
     // Use the sine wave fixture — Speaches will likely return empty or noise
     // but the important thing is that the round-trip works without errors
-    let audio = WavAudioStream::from_wav_file("tests/fixtures/audio/sine_440hz_1s.wav");
+    let audio =
+        WavAudioStream::from_wav_file(&fixture_path("tests/fixtures/audio/sine_440hz_1s.wav"));
 
     provider
         .stream(Box::new(audio), tx)
@@ -121,7 +132,7 @@ async fn test_speaches_asr_handles_silence() {
 
     let (tx, mut rx) = mpsc::channel::<PipelineEvent>(10);
 
-    let audio = WavAudioStream::from_wav_file("tests/fixtures/audio/silence_1s.wav");
+    let audio = WavAudioStream::from_wav_file(&fixture_path("tests/fixtures/audio/silence_1s.wav"));
 
     provider
         .stream(Box::new(audio), tx)
