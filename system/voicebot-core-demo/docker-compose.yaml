@@ -32,8 +32,9 @@ services:
         volumes:
             - ./config.docker.toml:/etc/voicebot/config.toml:ro
         environment:
-            - OPENAI_API_KEY=${OPENAI_API_KEY:-none}
             - RUST_LOG=${RUST_LOG:-info,voicebot_core=debug,asr=debug,tts=debug,agent=debug}
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
         depends_on:
             speaches:
                 condition: service_healthy
