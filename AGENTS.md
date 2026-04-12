@@ -21,6 +21,19 @@ All agent skills live in `skills/<name>/SKILL.md`. Read the relevant skill befor
 | `configuration` | config.toml parsing, env var substitution, fail-fast validation |
 | `observability` | tracing spans (always include session_id), Prometheus metrics |
 
+## Docker Compose
+
+All `docker compose` commands **must be run from the project root** (`/home/nack/voicebot-rs`) using `-f`:
+
+```bash
+# Correct — run from project root
+docker compose -f system/asterisk/docker-compose.yaml up -d
+docker compose -f system/speaches/compose.cpu.yaml up -d
+docker compose -f system/voicebot-core-demo/docker-compose.yaml up -d
+```
+
+Volume paths in compose files are relative to the compose file's directory (Docker Compose standard). YAML `extends:` references also use paths relative to the file. Running from a subdirectory breaks `extends` chains — always use `-f` from root.
+
 ## Key Rules
 
 - Read `voicebot/README.md` for the crate dependency graph — violations break the build.
