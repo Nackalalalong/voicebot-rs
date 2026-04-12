@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use common::error::AsrError;
 use common::events::PipelineEvent;
 use common::traits::{AsrProvider, AudioInputStream};
-use futures::StreamExt;
 use reqwest::multipart;
 use tokio::sync::mpsc::Sender;
 use tracing::debug;
@@ -115,9 +114,9 @@ impl SpeachesAsrProvider {
     }
 }
 
-/// SSE segment from streaming transcription (verbose_json format).
+/// Non-streaming verbose_json transcription response.
 #[derive(serde::Deserialize)]
-struct SseSegment {
+struct TranscriptionResponse {
     text: String,
 }
 
@@ -144,60 +143,44 @@ impl AsrProvider for SpeachesAsrProvider {
             return Ok(());
         }
 
-        // Use SSE streaming to get partial transcripts
-        let form = self.build_form(pcm_bytes, true)?;
+        // Use non-streaming verbose_json (SSE streaming is broken in Speaches for whisper)
+        let form = self.build_form(pcm_bytes, false)?;
         tracing::debug!(url = %format!("{}/v1/audio/transcriptions", self.base_url), model = %self.model, language = ?self.language, "ASR sending request");
         let resp = self.send_request(form).await?;
-        tracing::debug!("ASR request accepted, reading SSE stream");
+
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| AsrError::InvalidResponse(format!("read error: {e}")))?;
+
+        let parsed: TranscriptionResponse = serde_json::from_slice(&body).map_err(|e| {
+            AsrError::InvalidResponse(format!(
+                "JSON parse error: {e} — body: {}",
+                String::from_utf8_lossy(&body)
+            ))
+        })?;
 
         let language = self.language.clone().unwrap_or_else(|| "auto".into());
-        let mut full_text = String::new();
-        let mut byte_stream = resp.bytes_stream();
-        let mut buffer = String::new();
+        let text = parsed.text.trim().to_string();
 
-        while let Some(chunk) = byte_stream.next().await {
-            let bytes = chunk
-                .map_err(|e| AsrError::InvalidResponse(format!("SSE stream read error: {e}")))?;
-            buffer.push_str(&String::from_utf8_lossy(&bytes));
-
-            // Process complete SSE lines
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
-                buffer.drain(..=newline_pos);
-
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if data == "[DONE]" {
-                        debug!("ASR SSE stream done");
-                        continue;
-                    }
-                    if let Ok(segment) = serde_json::from_str::<SseSegment>(data) {
-                        if !segment.text.is_empty() {
-                            tracing::debug!(text = %segment.text, "ASR partial transcript");
-                            tx.send(PipelineEvent::PartialTranscript {
-                                text: segment.text.clone(),
-                                confidence: 0.0,
-                            })
-                            .await
-                            .map_err(|_| AsrError::ChannelClosed)?;
-                            full_text.push_str(&segment.text);
-                        }
-                    }
-                }
-            }
+        if text.is_empty() {
+            debug!("ASR produced no transcript");
+            return Ok(());
         }
 
-        // Emit the final aggregated transcript
-        if !full_text.is_empty() {
-            debug!(text = %full_text, "ASR final transcript");
-            tx.send(PipelineEvent::FinalTranscript {
-                text: full_text,
-                language,
-            })
+        debug!(text = %text, "ASR final transcript");
+
+        // Emit partial first so orchestrator can show live text, then final
+        tx.send(PipelineEvent::PartialTranscript {
+            text: text.clone(),
+            confidence: 0.0,
+        })
+        .await
+        .map_err(|_| AsrError::ChannelClosed)?;
+
+        tx.send(PipelineEvent::FinalTranscript { text, language })
             .await
             .map_err(|_| AsrError::ChannelClosed)?;
-        } else {
-            debug!("ASR produced no transcript");
-        }
 
         Ok(())
     }
@@ -208,10 +191,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sse_segment_parse() {
-        let json = r#"{"text": "hello world"}"#;
-        let segment: SseSegment = serde_json::from_str(json).unwrap();
-        assert_eq!(segment.text, "hello world");
+    fn test_transcription_response_parse() {
+        let json = r#"{"text": "hello world", "segments": []}"#;
+        let resp: TranscriptionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.text, "hello world");
     }
 
     #[test]
