@@ -41,7 +41,7 @@ model_path = "./models/tts_model.pth"
 [asr.speaches]
 base_url = "http://localhost:8000"
 # api_key = "${SPEACHES_API_KEY}"
-model = "Systran/faster-distil-whisper-large-v3"
+model = "Systran/faster-whisper-tiny"
 language = "en"
 
 [tts.speaches]

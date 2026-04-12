@@ -1,29 +1,53 @@
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
 
-/// Initialize structured tracing with JSON output.
+/// Initialize tracing.
+/// - If `LOG_FORMAT=json` or stdout is not a TTY: structured JSON (for log aggregators).
+/// - Otherwise: colorized human-readable output for the terminal.
 pub fn init_tracing() {
+    use std::io::IsTerminal;
     use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,voicebot_core=debug"));
-
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            fmt::layer()
-                .json()
-                .with_target(true)
-                .with_thread_ids(true)
-                .with_span_events(fmt::format::FmtSpan::CLOSE),
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "info,voicebot_core=debug,asr=debug,tts=debug,agent=debug,transport_websocket=debug",
         )
-        .init();
+    });
+
+    let use_json =
+        std::env::var("LOG_FORMAT").as_deref() == Ok("json") || !std::io::stdout().is_terminal();
+
+    if use_json {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_span_events(fmt::format::FmtSpan::CLOSE),
+            )
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                fmt::layer()
+                    .pretty()
+                    .with_ansi(true)
+                    .with_target(true)
+                    .with_span_events(fmt::format::FmtSpan::CLOSE),
+            )
+            .init();
+    }
 }
 
 /// Install the Prometheus metrics exporter, listening on the given address.
 /// Returns the socket address the metrics server is bound to.
 pub fn init_metrics(addr: &str) -> Result<std::net::SocketAddr, String> {
-    let addr: std::net::SocketAddr = addr.parse().map_err(|e| format!("bad metrics addr: {}", e))?;
+    let addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| format!("bad metrics addr: {}", e))?;
     let builder = PrometheusBuilder::new().with_http_listener(addr);
     builder
         .install()

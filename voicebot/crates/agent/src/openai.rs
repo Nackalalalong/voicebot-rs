@@ -74,6 +74,13 @@ impl LlmProvider for OpenAiProvider {
     ) -> Result<(), LlmError> {
         self.cancelled.store(false, Ordering::Relaxed);
 
+        tracing::debug!(
+            model = %self.model,
+            message_count = messages.len(),
+            tool_count = tools.len(),
+            "starting LLM stream_completion"
+        );
+
         // Build request body
         let mut body = serde_json::json!({
             "model": self.model,
@@ -99,17 +106,27 @@ impl LlmProvider for OpenAiProvider {
             body["tools"] = serde_json::Value::Array(tools_json);
         }
 
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        tracing::debug!(url = %url, "sending chat completions request");
+
         let response = self
             .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
+            .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await
-            .map_err(|_| LlmError::ConnectionFailed)?;
+            .map_err(|e| {
+                tracing::error!(url = %url, error = %e, "LLM connection failed");
+                LlmError::ConnectionFailed
+            })?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+        tracing::debug!(status = %status, "received LLM response");
+
+        if !status.is_success() {
+            tracing::error!(status = %status, url = %url, "LLM returned non-success status");
             return Err(LlmError::ConnectionFailed);
         }
 
@@ -121,6 +138,7 @@ impl LlmProvider for OpenAiProvider {
 
         while let Some(chunk_result) = stream.next().await {
             if self.cancelled.load(Ordering::Relaxed) {
+                tracing::debug!("LLM stream cancelled");
                 return Err(LlmError::Cancelled);
             }
 
@@ -145,7 +163,7 @@ impl LlmProvider for OpenAiProvider {
                 let parsed: StreamChunk = match serde_json::from_str(data) {
                     Ok(c) => c,
                     Err(e) => {
-                        tracing::warn!("failed to parse SSE chunk: {}", e);
+                        tracing::warn!(raw = %data, error = %e, "failed to parse SSE chunk");
                         continue;
                     }
                 };
@@ -153,6 +171,7 @@ impl LlmProvider for OpenAiProvider {
                 for choice in &parsed.choices {
                     // Handle content delta
                     if let Some(ref content) = choice.delta.content {
+                        tracing::trace!(content = %content, "LLM partial content delta");
                         full_text.push_str(content);
                         let _ = tx
                             .send(PipelineEvent::AgentPartialResponse {
@@ -165,6 +184,7 @@ impl LlmProvider for OpenAiProvider {
                     if let Some(ref tcs) = choice.delta.tool_calls {
                         for tc in tcs {
                             let index = tc.index.unwrap_or(0);
+                            tracing::trace!(index = index, id = ?tc.id, "LLM tool call delta");
 
                             // Grow the accumulator if needed
                             while accumulated_tool_calls.len() <= index {
@@ -193,10 +213,20 @@ impl LlmProvider for OpenAiProvider {
         }
 
         // Build final tool calls
+        tracing::debug!(
+            text_len = full_text.len(),
+            tool_call_count = accumulated_tool_calls
+                .iter()
+                .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
+                .count(),
+            "LLM stream complete"
+        );
+
         let tool_calls: Vec<ToolCall> = accumulated_tool_calls
             .into_iter()
             .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
             .map(|(id, name, args_json)| {
+                tracing::debug!(id = %id, name = %name, args = %args_json, "LLM tool call finalized");
                 let arguments: serde_json::Value = serde_json::from_str(&args_json)
                     .unwrap_or(serde_json::Value::Object(Default::default()));
                 ToolCall {
@@ -206,6 +236,7 @@ impl LlmProvider for OpenAiProvider {
             })
             .collect();
 
+        tracing::debug!(tool_calls = tool_calls.len(), "sending AgentFinalResponse");
         let _ = tx
             .send(PipelineEvent::AgentFinalResponse {
                 text: full_text,
@@ -217,6 +248,7 @@ impl LlmProvider for OpenAiProvider {
     }
 
     async fn cancel(&self) {
+        tracing::debug!("LLM provider cancel requested");
         self.cancelled.store(true, Ordering::Relaxed);
     }
 }

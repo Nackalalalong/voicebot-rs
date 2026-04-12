@@ -133,14 +133,22 @@ impl AsrProvider for SpeachesAsrProvider {
         while let Some(frame) = audio.recv().await {
             pcm_bytes.extend_from_slice(&frame.to_pcm_bytes());
         }
+        tracing::debug!(
+            bytes = pcm_bytes.len(),
+            duration_ms = pcm_bytes.len() / 32,
+            "ASR audio collected"
+        );
 
         if pcm_bytes.is_empty() {
+            tracing::debug!("ASR skipping empty audio");
             return Ok(());
         }
 
         // Use SSE streaming to get partial transcripts
         let form = self.build_form(pcm_bytes, true)?;
+        tracing::debug!(url = %format!("{}/v1/audio/transcriptions", self.base_url), model = %self.model, language = ?self.language, "ASR sending request");
         let resp = self.send_request(form).await?;
+        tracing::debug!("ASR request accepted, reading SSE stream");
 
         let language = self.language.clone().unwrap_or_else(|| "auto".into());
         let mut full_text = String::new();
@@ -159,11 +167,12 @@ impl AsrProvider for SpeachesAsrProvider {
 
                 if let Some(data) = line.strip_prefix("data: ") {
                     if data == "[DONE]" {
+                        debug!("ASR SSE stream done");
                         continue;
                     }
                     if let Ok(segment) = serde_json::from_str::<SseSegment>(data) {
                         if !segment.text.is_empty() {
-                            debug!(text = %segment.text, "ASR partial transcript");
+                            tracing::debug!(text = %segment.text, "ASR partial transcript");
                             tx.send(PipelineEvent::PartialTranscript {
                                 text: segment.text.clone(),
                                 confidence: 0.0,
@@ -179,12 +188,15 @@ impl AsrProvider for SpeachesAsrProvider {
 
         // Emit the final aggregated transcript
         if !full_text.is_empty() {
+            debug!(text = %full_text, "ASR final transcript");
             tx.send(PipelineEvent::FinalTranscript {
                 text: full_text,
                 language,
             })
             .await
             .map_err(|_| AsrError::ChannelClosed)?;
+        } else {
+            debug!("ASR produced no transcript");
         }
 
         Ok(())
