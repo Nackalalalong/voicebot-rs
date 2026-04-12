@@ -11,7 +11,7 @@ services:
     # ── Speaches (ASR + TTS + OpenAI-compatible chat) ─────────────────────────
     speaches:
         extends:
-            file: ../../system/speaches/compose.cpu.yaml
+            file: ./system/speaches/compose.cpu.yaml
             service: speaches
         restart: unless-stopped
         healthcheck:
@@ -24,13 +24,13 @@ services:
     # ── Voicebot server ────────────────────────────────────────────────────────
     voicebot:
         build:
-            context: ../../voicebot
+            context: ./system/voicebot
             dockerfile: Dockerfile
         restart: unless-stopped
         ports:
             - '${VOICEBOT_PORT:-8080}:8080'
         volumes:
-            - ./config.docker.toml:/etc/voicebot/config.toml:ro
+            - ./system/voicebot/config.docker.toml:/etc/voicebot/config.toml:ro
         environment:
             - RUST_LOG=${RUST_LOG:-info,voicebot_core=debug,asr=debug,tts=debug,agent=debug}
         extra_hosts:
@@ -46,6 +46,6 @@ services:
         ports:
             - '${WEB_PORT:-3000}:80'
         volumes:
-            - .:/usr/share/nginx/html:ro
+            - ./system/voicebot-core-demo:/usr/share/nginx/html:ro
         depends_on:
             - voicebot
