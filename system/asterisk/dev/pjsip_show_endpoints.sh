@@ -1,0 +1,1 @@
+docker compose -f system/asterisk/docker-compose.yaml exec -T tele asterisk -rx 'pjsip show endpoints'
