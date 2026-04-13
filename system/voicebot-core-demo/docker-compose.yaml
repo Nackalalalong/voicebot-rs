@@ -20,6 +20,8 @@ services:
             timeout: 5s
             retries: 6
             start_period: 10s
+        networks:
+            - voicebot-net
 
     # ── Voicebot server ────────────────────────────────────────────────────────
     voicebot:
@@ -38,6 +40,8 @@ services:
         depends_on:
             speaches:
                 condition: service_healthy
+        networks:
+            - voicebot-net
 
     # ── Web demo (static files via nginx) ─────────────────────────────────────
     web:
@@ -49,3 +53,9 @@ services:
             - .:/usr/share/nginx/html:ro
         depends_on:
             - voicebot
+        networks:
+            - voicebot-net
+
+networks:
+    voicebot-net:
+        driver: bridge
