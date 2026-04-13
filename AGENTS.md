@@ -16,6 +16,7 @@ All agent skills live in `skills/<name>/SKILL.md`. Read the relevant skill befor
 | `testing_convention` | Test structure, TestAudioStream, mock providers, fixtures |
 | `orchestrator_and_pipeline_session` | State machine, session lifecycle, channel wiring, interrupts |
 | `websocket_transport` | WS server, binary/JSON framing, session spawning |
+| `xphone` | Native SIP virtual phone for loadtest: xphone crate API, registration, inbound/outbound calls, PCM audio I/O, tokio bridge, Asterisk endpoint config |
 | `agent_tool_calling` | Tool loop (max 5 iters), conversation memory, sentence-boundary TTS |
 | `asterisk_ari` | Asterisk ARI Stasis app: WS events, AudioSocket protocol, REST channel control, DTMF |
 | `configuration` | config.toml parsing, env var substitution, fail-fast validation |
