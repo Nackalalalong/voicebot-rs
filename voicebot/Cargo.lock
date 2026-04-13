@@ -2342,6 +2342,7 @@ dependencies = [
  "async-trait",
  "common",
  "futures",
+ "hound",
  "metrics",
  "metrics-exporter-prometheus",
  "thiserror 2.0.18",

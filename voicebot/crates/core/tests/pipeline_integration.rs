@@ -588,3 +588,200 @@ async fn test_tts_provider_failure_is_handled() {
         "unexpected error: {error}"
     );
 }
+
+// ── WAV fixture helpers ───────────────────────────────────────────────────────
+
+/// Load a WAV file from `tests/fixtures/audio/` and split it into
+/// 320-sample (20 ms at 16 kHz) `AudioFrame`s.
+///
+/// Supports mono and stereo (stereo mixed to mono).
+/// If the file's sample rate differs from 16 000 Hz, a simple linear
+/// interpolation is applied so the pipeline always receives 16 kHz frames.
+fn load_wav_frames(filename: &str) -> Vec<AudioFrame> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent() // crates/core → crates
+        .unwrap()
+        .parent() // crates → voicebot
+        .unwrap()
+        .join("tests/fixtures/audio")
+        .join(filename);
+
+    let mut reader = hound::WavReader::open(&path)
+        .unwrap_or_else(|e| panic!("failed to open {}: {e}", path.display()));
+
+    let spec = reader.spec();
+    assert_eq!(spec.bits_per_sample, 16, "fixture must be 16-bit PCM");
+
+    let raw_16bit: Vec<i16> = reader
+        .samples::<i16>()
+        .map(|s| s.expect("WAV sample read error"))
+        .collect();
+
+    // Mix stereo → mono if needed
+    let mono: Vec<i16> = match spec.channels {
+        1 => raw_16bit,
+        2 => raw_16bit
+            .chunks_exact(2)
+            .map(|lr| ((lr[0] as i32 + lr[1] as i32) / 2) as i16)
+            .collect(),
+        ch => panic!("unsupported channel count: {ch}"),
+    };
+
+    // Resample to 16 000 Hz via linear interpolation if needed
+    let resampled: Vec<i16> = if spec.sample_rate == 16000 {
+        mono
+    } else {
+        let ratio = spec.sample_rate as f64 / 16000.0;
+        let out_len = (mono.len() as f64 / ratio) as usize;
+        (0..out_len)
+            .map(|i| {
+                let src = i as f64 * ratio;
+                let idx = src as usize;
+                if idx + 1 < mono.len() {
+                    let frac = src - idx as f64;
+                    (mono[idx] as f64 + frac * (mono[idx + 1] as f64 - mono[idx] as f64)) as i16
+                } else if idx < mono.len() {
+                    mono[idx]
+                } else {
+                    0
+                }
+            })
+            .collect()
+    };
+
+    // Chunk into 320-sample frames (20 ms)
+    resampled
+        .chunks(320)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let mut samples = chunk.to_vec();
+            samples.resize(320, 0);
+            AudioFrame::new(samples, i as u64 * 20)
+        })
+        .collect()
+}
+
+// ── E2E test with WAV audio fixtures ─────────────────────────────────────────
+
+/// End-to-end pipeline test driven by a real WAV audio fixture.
+///
+/// Loads `sample_speech.wav` (voiced content), feeds it frame-by-frame into
+/// the pipeline, appends silence to trigger VAD SpeechEnded, then drops the
+/// audio channel to flush ASR.  Verifies the full event chain:
+///   FinalTranscript → AgentFinalResponse → TtsAudioChunk → TtsComplete
+#[tokio::test]
+async fn test_e2e_with_wav_fixture_sample_speech() {
+    let config = default_config();
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(256);
+    let (egress_tx, mut egress_rx) = mpsc::channel::<PipelineEvent>(256);
+
+    let asr: Arc<dyn common::traits::AsrProvider> = Arc::new(asr::stub::StubAsrProvider);
+    let llm: Arc<dyn common::traits::LlmProvider> = Arc::new(agent::stub::StubLlmProvider);
+    let tts: Arc<dyn common::traits::TtsProvider> = Arc::new(tts::stub::StubTtsProvider);
+
+    let mut session =
+        voicebot_core::session::PipelineSession::start(config, audio_rx, egress_tx, asr, llm, tts)
+            .await
+            .expect("session start failed");
+
+    // Load the voiced WAV fixture and send every frame into the pipeline.
+    let speech_frames = load_wav_frames("sample_speech.wav");
+    let frame_count = speech_frames.len();
+    assert!(frame_count > 0, "fixture must contain audio");
+
+    for frame in speech_frames {
+        audio_tx.send(frame).await.expect("send wav frame");
+    }
+
+    // 1 000 ms of silence after speech to trigger VAD SpeechEnded.
+    let silence_start = frame_count;
+    for frame in make_silence_frames(50, silence_start) {
+        audio_tx.send(frame).await.expect("send silence");
+    }
+
+    // Drop the sender — ASR will see end-of-stream and flush FinalTranscript.
+    drop(audio_tx);
+
+    // Collect events and verify the full flow completes.
+    let mut got_final_transcript = false;
+    let mut got_agent_response = false;
+    let mut got_tts_audio = false;
+    let mut got_tts_complete = false;
+
+    let outcome = timeout(Duration::from_secs(10), async {
+        while let Some(event) = egress_rx.recv().await {
+            match event {
+                PipelineEvent::FinalTranscript { ref text, .. } => {
+                    assert_eq!(text, "stub transcript", "unexpected ASR text");
+                    got_final_transcript = true;
+                }
+                PipelineEvent::AgentFinalResponse { ref text, .. } => {
+                    assert_eq!(text, "stub response", "unexpected LLM text");
+                    got_agent_response = true;
+                }
+                PipelineEvent::TtsAudioChunk { .. } => {
+                    got_tts_audio = true;
+                }
+                PipelineEvent::TtsComplete => {
+                    got_tts_complete = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await;
+
+    assert!(outcome.is_ok(), "pipeline did not complete within 10 s");
+    assert!(got_final_transcript, "missing FinalTranscript");
+    assert!(got_agent_response, "missing AgentFinalResponse");
+    assert!(got_tts_audio, "missing TtsAudioChunk");
+    assert!(got_tts_complete, "missing TtsComplete");
+
+    session.terminate().await;
+}
+
+/// E2E test using `sine_440hz_1s.wav` as the voiced input.
+///
+/// Tests that pure-tone input (easy to generate; amplitude is well above
+/// the VAD threshold) also drives the full pipeline end-to-end.
+#[tokio::test]
+async fn test_e2e_with_wav_fixture_sine_440hz() {
+    let config = default_config();
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(256);
+    let (egress_tx, mut egress_rx) = mpsc::channel::<PipelineEvent>(256);
+
+    let asr: Arc<dyn common::traits::AsrProvider> = Arc::new(asr::stub::StubAsrProvider);
+    let llm: Arc<dyn common::traits::LlmProvider> = Arc::new(agent::stub::StubLlmProvider);
+    let tts: Arc<dyn common::traits::TtsProvider> = Arc::new(tts::stub::StubTtsProvider);
+
+    let mut session =
+        voicebot_core::session::PipelineSession::start(config, audio_rx, egress_tx, asr, llm, tts)
+            .await
+            .expect("session start failed");
+
+    let sine_frames = load_wav_frames("sine_440hz_1s.wav");
+    let frame_count = sine_frames.len();
+    for frame in sine_frames {
+        audio_tx.send(frame).await.expect("send sine frame");
+    }
+    for frame in make_silence_frames(50, frame_count) {
+        audio_tx.send(frame).await.expect("send silence");
+    }
+    drop(audio_tx);
+
+    let outcome = timeout(Duration::from_secs(10), async {
+        while let Some(event) = egress_rx.recv().await {
+            if matches!(event, PipelineEvent::TtsComplete) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+
+    assert!(outcome.is_ok(), "pipeline did not complete within 10 s");
+    assert!(outcome.unwrap(), "TtsComplete not received");
+
+    session.terminate().await;
+}
