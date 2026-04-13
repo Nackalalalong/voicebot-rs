@@ -27,6 +27,18 @@ impl<T: ProviderFailureHandler> ProviderFailureHandler for Arc<T> {
     }
 }
 
+/// [`ProviderFailureHandler`] that logs the error at ERROR level without panicking.
+///
+/// Use this in production so unrecoverable provider failures are recorded but do
+/// not crash the worker thread.
+pub struct LogOnProviderError;
+
+impl ProviderFailureHandler for LogOnProviderError {
+    fn on_provider_failure(&self, component: Component, error: &dyn std::error::Error) {
+        tracing::error!(component = %component, error = %error, "unrecoverable provider failure");
+    }
+}
+
 /// Trait that all component errors must implement.
 pub trait ComponentErrorTrait: std::error::Error + Send + Sync {
     /// Which component produced this error.

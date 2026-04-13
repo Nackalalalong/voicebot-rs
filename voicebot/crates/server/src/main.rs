@@ -15,9 +15,10 @@ async fn main() {
             std::process::exit(1);
         }
     };
-
     // Init structured tracing
     init_tracing();
+
+    tracing::info!("configuration loaded {:#?}", &config);
 
     // Init Prometheus metrics on port+1
     let metrics_addr = format!("{}:{}", config.server.host, config.server.port + 1);

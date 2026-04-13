@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use common::audio::AudioFrame;
 use common::config::AppConfig;
 use common::error::{
-    AsrError, ComponentErrorTrait, LlmError, PanicOnProviderError, ProviderFailureHandler,
+    AsrError, ComponentErrorTrait, LlmError, LogOnProviderError, ProviderFailureHandler,
 };
 use common::events::{PipelineEvent, SessionConfig};
 use common::testing::ReceiverAudioStream;
@@ -373,7 +373,7 @@ impl PipelineSession {
             asr,
             llm,
             tts,
-            Arc::new(PanicOnProviderError),
+            Arc::new(LogOnProviderError),
         )
         .await
     }
