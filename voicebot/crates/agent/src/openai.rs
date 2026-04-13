@@ -1,6 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// Maximum number of parallel tool calls we accept in a single LLM stream response.
+/// Guards against a misbehaving backend sending an unbounded `index` field.
+const MAX_PARALLEL_TOOL_CALLS: usize = 32;
+
 use async_trait::async_trait;
 use common::error::LlmError;
 use common::events::PipelineEvent;
@@ -188,6 +192,11 @@ impl LlmProvider for OpenAiProvider {
                         for tc in tcs {
                             let index = tc.index.unwrap_or(0);
                             tracing::trace!(index = index, id = ?tc.id, "LLM tool call delta");
+
+                            if index >= MAX_PARALLEL_TOOL_CALLS {
+                                tracing::warn!(index = index, max = MAX_PARALLEL_TOOL_CALLS, "LLM tool call index out of bounds; skipping");
+                                continue;
+                            }
 
                             // Grow the accumulator if needed
                             while accumulated_tool_calls.len() <= index {

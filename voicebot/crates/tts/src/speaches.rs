@@ -30,10 +30,7 @@ impl SpeachesTtsProvider {
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
-            .unwrap_or_else(|error| {
-                warn!(error = %error, "failed to build reqwest client with connect timeout; falling back to default client");
-                reqwest::Client::new()
-            });
+            .expect("failed to build reqwest client with connect timeout");
 
         Self {
             client,
