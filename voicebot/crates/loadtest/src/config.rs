@@ -39,6 +39,8 @@ pub struct AsteriskBackendConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XphoneBackendConfig {
     pub sip_host: String,
+    #[serde(default)]
+    pub local_ip: String,
     #[serde(default = "default_sip_port")]
     pub sip_port: u16,
     #[serde(default = "default_sip_transport")]

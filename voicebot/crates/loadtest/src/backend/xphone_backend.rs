@@ -29,6 +29,7 @@ impl XphoneBackend {
             username: config.username.clone(),
             password: config.password.clone(),
             host: config.sip_host.clone(),
+            local_ip: config.local_ip.clone(),
             port: config.sip_port,
             transport: config.transport.clone(),
             rtp_port_min: config.rtp_port_min,
@@ -36,6 +37,14 @@ impl XphoneBackend {
             codec_prefs: vec![Codec::PCMU],
             ..Config::default()
         };
+
+        debug!(
+            sip_host = %xphone_config.host,
+            local_ip = %xphone_config.local_ip,
+            rtp_port_min = xphone_config.rtp_port_min,
+            rtp_port_max = xphone_config.rtp_port_max,
+            "xphone: building phone config"
+        );
 
         let timeout_ms = config.register_timeout_ms;
 
@@ -104,6 +113,14 @@ impl Phase1Backend for XphoneBackend {
 
                 // Wait for the call to become active.
                 wait_for_active(&call, Duration::from_millis(call_timeout_ms))?;
+
+                debug!(
+                    remote_ip = %call.remote_ip(),
+                    remote_port = call.remote_port(),
+                    media_active = call.media_session_active(),
+                    remote_sdp = %call.remote_sdp().replace('\r', "").replace('\n', " | "),
+                    "xphone: outbound media negotiated"
+                );
 
                 let connect_ms = started_at.elapsed().as_millis() as u64;
 
@@ -211,6 +228,14 @@ impl Phase1Backend for XphoneBackend {
                 // Wait for the call media to become active.
                 wait_for_active(&call, Duration::from_millis(call_timeout_ms))?;
 
+                debug!(
+                    remote_ip = %call.remote_ip(),
+                    remote_port = call.remote_port(),
+                    media_active = call.media_session_active(),
+                    remote_sdp = %call.remote_sdp().replace('\r', "").replace('\n', " | "),
+                    "xphone: inbound media negotiated"
+                );
+
                 let connect_ms = started_at.elapsed().as_millis() as u64;
 
                 // Set up ended notification.
@@ -295,6 +320,16 @@ impl Drop for XphoneBackend {
 
 /// Block the current thread until the call reaches `Active` state or timeout.
 fn wait_for_active(call: &Arc<Call>, timeout: Duration) -> Result<(), LoadtestError> {
+    match call.state() {
+        CallState::Active | CallState::OnHold => return Ok(()),
+        CallState::Ended => {
+            return Err(LoadtestError::Protocol(
+                "xphone: call ended before becoming active".into(),
+            ));
+        }
+        _ => {}
+    }
+
     let (active_tx, active_rx) = crossbeam_channel::bounded(1);
     let (failed_tx, failed_rx) = crossbeam_channel::bounded::<String>(1);
 
@@ -307,6 +342,16 @@ fn wait_for_active(call: &Arc<Call>, timeout: Duration) -> Result<(), LoadtestEr
         }
         _ => {}
     });
+
+    match call.state() {
+        CallState::Active | CallState::OnHold => return Ok(()),
+        CallState::Ended => {
+            return Err(LoadtestError::Protocol(
+                "xphone: call ended before becoming active".into(),
+            ));
+        }
+        _ => {}
+    }
 
     crossbeam_channel::select! {
         recv(active_rx) -> _ => Ok(()),

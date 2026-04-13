@@ -17,7 +17,7 @@ energy_threshold = 0.001
 primary = "speaches"
 
 [asr.speaches]
-base_url = "http://localhost:8000"
+base_url = "http://host.docker.internal:8000"
 model = "mock-asr"
 language = "en"
 
@@ -25,14 +25,14 @@ language = "en"
 primary = "openai"
 
 [llm.openai]
-base_url = "http://localhost:8000"
+base_url = "http://host.docker.internal:8000"
 api_key = "mock"
 model = "mock-llm"
 max_tokens = 64
 temperature = 0.0
 
 [tts.speaches]
-base_url = "http://localhost:8000"
+base_url = "http://host.docker.internal:8000"
 model = "mock-tts"
 voice = "af_heart"
 
@@ -40,14 +40,10 @@ voice = "af_heart"
 audio_ingress_capacity = 50
 event_bus_capacity = 200
 
-# Asterisk ARI transport — Asterisk runs in Docker on the default bridge
 [asterisk]
-ari_host  = "localhost"
+ari_host  = "127.0.0.1"
 ari_port  = 8088
 username  = "voicebot"
 password  = "voicebot"
 app_name  = "voicebot"
-# WSL2+Docker Desktop: containers cannot reach 172.17.0.1 from this WSL instance.
-# Use the WSL2 eth1 LAN IP — confirmed reachable from Docker containers.
-# If your IP changes, update this value (run: ip addr show eth1).
-audio_host = "192.168.1.110"
+audio_host = "127.0.0.1"

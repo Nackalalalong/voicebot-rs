@@ -6,7 +6,7 @@ Runs the full voicebot phone-call load test without real AI models.
 [xphone virtual phones]  ─SIP/RTP─►  [Asterisk (Docker)]
                                              │ ARI
                                              ▼
-                                    [voicebot-server (host)]
+                                    [voicebot-server (Docker)]
                                              │ HTTP
                                              ▼
                                     [mock-provider (Docker)]
@@ -22,18 +22,14 @@ Runs the full voicebot phone-call load test without real AI models.
 ## Quick start
 
 ```bash
-# 1. Start Asterisk + mock-provider
+# 1. Start Asterisk + voicebot + mock-provider
 docker compose -f system/loadtest_mock_provider/docker-compose.yaml up -d --build
 
-# 2. Build release binaries (once; skip on subsequent runs)
+# 2. Build the host-side loadtest runner (once; skip on subsequent runs)
 cd voicebot
-cargo build --release -p voicebot-server -p voicebot-loadtest
+cargo build --release -p voicebot-loadtest
 
-# 3. Start the voicebot server (leave running)
-cargo run --release -p voicebot-server -- \
-  ../system/loadtest_mock_provider/config.voicebot.toml
-
-# 4. In a separate terminal — run the load test
+# 3. Run the load test from the host
 cd voicebot
 cargo run --release -p voicebot-loadtest -- \
   ../system/loadtest_mock_provider/loadtest.toml
@@ -43,12 +39,23 @@ Artifacts (per-call WAVs + summary JSON + Markdown report) are written to `voice
 
 ## Tuning
 
-| What                                 | How                                                 |
-| ------------------------------------ | --------------------------------------------------- |
-| Concurrency / call count             | Edit `loadtest.toml` `[campaign]`                   |
+| What | How |
+| --- | --- |
+| Concurrency / call count | Edit `loadtest.toml` `[campaign]` |
 | Mock latency (simulate slow ASR/TTS) | `MOCK_LATENCY_MS=50` env on mock-provider container |
-| voicebot log level                   | `RUST_LOG=info,voicebot_core=debug`                 |
-| Docker bridge IP (if not 172.17.0.1) | Change `audio_host` in `config.voicebot.toml`       |
+| voicebot log level | `docker logs -f loadtest-voicebot` |
+| WSL host IP changed | Update `audio_host`, `backend.xphone.local_ip`, and `system/loadtest_mock_provider/asterisk/pjsip_transport.conf` |
+| Telephony VAD sensitivity | Edit `[vad]` in `config.voicebot.docker.toml` |
+| Time allowed for bot reply | Edit `record_after_playback_ms` in `loadtest.toml` |
+
+## WSL2 / Docker Desktop Notes
+
+This stack keeps Asterisk, voicebot, and the mock provider inside one Docker network so RTP between Asterisk and voicebot does not traverse the WSL2 host boundary.
+
+- `loadtest.toml` `backend.xphone.local_ip` should match that same host IP so xphone advertises a reachable RTP address.
+- `asterisk/pjsip_transport.conf` advertises that host IP back to xphone in SDP so RTP is symmetric in both directions.
+
+If your WSL IP changes, update the two host-facing SIP settings before rerunning the campaign.
 
 ## Stopping
 

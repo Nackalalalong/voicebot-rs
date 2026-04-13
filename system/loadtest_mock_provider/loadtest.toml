@@ -2,7 +2,8 @@
 kind = "xphone"
 
 [backend.xphone]
-sip_host             = "localhost"
+sip_host             = "127.0.0.1"
+local_ip             = "192.168.1.110"
 sip_port             = 5060
 transport            = "udp"
 username             = "voicebot"
@@ -19,7 +20,7 @@ caller_id                  = "loadtest"
 concurrency                = 5
 total_calls                = 20
 settle_before_playback_ms  = 500
-record_after_playback_ms   = 3000
+record_after_playback_ms   = 6000
 ramp_up_ms                 = 1000
 call_rate_per_second       = 0.0
 

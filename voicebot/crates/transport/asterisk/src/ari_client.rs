@@ -157,24 +157,20 @@ impl AriRestClient {
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| AriError::Protocol("externalMedia response missing 'id'".into()))?;
-        let channelvars = body["channelvars"]
-            .as_object()
-            .ok_or_else(|| AriError::Protocol("externalMedia response missing 'channelvars'".into()))?;
+        let channelvars = body["channelvars"].as_object().ok_or_else(|| {
+            AriError::Protocol("externalMedia response missing 'channelvars'".into())
+        })?;
         let local_address = channelvars
             .get("UNICASTRTP_LOCAL_ADDRESS")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                AriError::Protocol(
-                    "externalMedia response missing UNICASTRTP_LOCAL_ADDRESS".into(),
-                )
+                AriError::Protocol("externalMedia response missing UNICASTRTP_LOCAL_ADDRESS".into())
             })?;
         let local_port = channelvars
             .get("UNICASTRTP_LOCAL_PORT")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                AriError::Protocol(
-                    "externalMedia response missing UNICASTRTP_LOCAL_PORT".into(),
-                )
+                AriError::Protocol("externalMedia response missing UNICASTRTP_LOCAL_PORT".into())
             })?;
         let remote_addr = format!("{}:{}", local_address, local_port)
             .parse()

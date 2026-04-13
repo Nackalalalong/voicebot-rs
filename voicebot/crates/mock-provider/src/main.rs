@@ -48,12 +48,20 @@ struct Cfg {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Build a minimal WAV file containing `num_samples` zero-valued (silence)
-/// i16 samples at 16 kHz mono.  The voicebot TTS consumer expects raw PCM LE
-/// without a WAV header — Speaches streams raw bytes.  We return raw PCM too.
-fn silence_pcm(num_samples: usize) -> Vec<u8> {
-    // i16 LE zero = two zero bytes
-    vec![0u8; num_samples * 2]
+/// Build a short audible tone as raw PCM16 LE so the loadtest analyzer can
+/// distinguish a real bot response from silence.
+fn tone_pcm(num_samples: usize, sample_rate_hz: f32, frequency_hz: f32) -> Vec<u8> {
+    let amplitude = i16::MAX as f32 * 0.2;
+    let mut pcm = Vec::with_capacity(num_samples * 2);
+
+    for sample_index in 0..num_samples {
+        let phase =
+            2.0 * std::f32::consts::PI * frequency_hz * sample_index as f32 / sample_rate_hz;
+        let sample = (phase.sin() * amplitude) as i16;
+        pcm.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    pcm
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -148,14 +156,14 @@ async fn chat_completions(State(cfg): State<Cfg>) -> Response {
 }
 
 /// POST /v1/audio/speech
-/// Returns raw PCM-16 LE at 16 kHz (500 ms of silence = 8 000 bytes).
+/// Returns raw PCM-16 LE at 16 kHz (500 ms tone).
 /// The Content-Type mimics what Speaches returns for `response_format=pcm`.
 async fn audio_speech(State(cfg): State<Cfg>) -> Response {
     if cfg.latency > Duration::ZERO {
         sleep(cfg.latency).await;
     }
     // 500 ms at 16 kHz = 8 000 samples = 16 000 bytes
-    let pcm = silence_pcm(8_000);
+    let pcm = tone_pcm(8_000, 16_000.0, 660.0);
 
     Response::builder()
         .status(StatusCode::OK)

@@ -45,7 +45,7 @@ RUN touch crates/mock-provider/src/main.rs && \
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/mock-provider /usr/local/bin/mock-provider

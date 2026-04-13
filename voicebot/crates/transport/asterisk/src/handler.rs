@@ -9,6 +9,7 @@ use common::types::{AsrProviderType, Language, LlmProviderType, TtsProviderType}
 use futures::StreamExt;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
+use tokio::time::{sleep_until, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -21,6 +22,7 @@ use crate::rtp::{build_pcmu_packet, parse_rtp_payload, pcmu_payload_to_frame};
 
 const RTP_FRAME_16K_SAMPLES: usize = 320;
 const RTP_TIMESTAMP_STEP: u32 = 160;
+const RTP_PACKET_INTERVAL: Duration = Duration::from_millis(20);
 
 // ---------------------------------------------------------------------------
 // Call registry — maps caller channel-id → per-session cancel token.
@@ -200,6 +202,7 @@ async fn handle_stasis_start(
     let ext_media = rest
         .create_external_media(&config.app_name, &external_host, "ulaw")
         .await?;
+    let ext_media_channel_id = ext_media.id.clone();
 
     // 4. Create a mixing bridge and add both channels.
     let bridge_id = rest
@@ -232,7 +235,7 @@ async fn handle_stasis_start(
             Ok(s) => s,
             Err(e) => {
                 error!(%channel_id, "failed to start pipeline session: {}", e);
-                cleanup(&rest, &bridge_id, channel_id).await;
+                cleanup(&rest, &bridge_id, channel_id, Some(&ext_media_channel_id)).await;
                 return Err(AriError::Session(e.to_string()));
             }
         };
@@ -251,7 +254,7 @@ async fn handle_stasis_start(
 
     // 9. Tear down.
     session.terminate().await;
-    cleanup(&rest, &bridge_id, channel_id).await;
+    cleanup(&rest, &bridge_id, channel_id, Some(&ext_media_channel_id)).await;
 
     info!(%channel_id, %session_id, "call ended");
     Ok(())
@@ -280,10 +283,12 @@ async fn run_bridge(
     let seed = Uuid::new_v4();
     let seed_bytes = seed.as_bytes();
     let mut sequence = u16::from_be_bytes([seed_bytes[0], seed_bytes[1]]);
-    let mut timestamp = u32::from_be_bytes([seed_bytes[2], seed_bytes[3], seed_bytes[4], seed_bytes[5]]);
+    let mut timestamp =
+        u32::from_be_bytes([seed_bytes[2], seed_bytes[3], seed_bytes[4], seed_bytes[5]]);
     let ssrc = u32::from_be_bytes([seed_bytes[6], seed_bytes[7], seed_bytes[8], seed_bytes[9]]);
     let mut packet_buffer = [0u8; 2048];
     let mut active_remote_addr = remote_addr;
+    let mut next_rtp_send_deadline: Option<Instant> = None;
 
     loop {
         tokio::select! {
@@ -297,8 +302,18 @@ async fn run_bridge(
                 match recv_result {
                     Ok((received, source_addr)) => {
                         if source_addr != active_remote_addr {
-                            info!(%channel_id, expected_peer = %active_remote_addr, actual_peer = %source_addr, "learning RTP peer address from live traffic");
-                            active_remote_addr = source_addr;
+                            let learned_remote_addr = SocketAddr::new(
+                                source_addr.ip(),
+                                active_remote_addr.port(),
+                            );
+                            info!(
+                                %channel_id,
+                                expected_peer = %active_remote_addr,
+                                actual_peer = %source_addr,
+                                learned_peer = %learned_remote_addr,
+                                "learning RTP peer address from live traffic"
+                            );
+                            active_remote_addr = learned_remote_addr;
                         }
                         let Some(payload) = parse_rtp_payload(&packet_buffer[..received]) else {
                             continue;
@@ -325,6 +340,12 @@ async fn run_bridge(
                 match event {
                     Some(PipelineEvent::TtsAudioChunk { frame, .. }) => {
                         for chunk in frame.data.chunks(RTP_FRAME_16K_SAMPLES) {
+                            if let Some(deadline) = next_rtp_send_deadline {
+                                let now = Instant::now();
+                                if deadline > now {
+                                    sleep_until(deadline).await;
+                                }
+                            }
                             let packet = build_pcmu_packet(chunk, sequence, timestamp, ssrc);
                             if udp_socket.send_to(&packet, active_remote_addr).await.is_err() {
                                 warn!(%channel_id, "RTP write error");
@@ -333,6 +354,7 @@ async fn run_bridge(
                             }
                             sequence = sequence.wrapping_add(1);
                             timestamp = timestamp.wrapping_add(RTP_TIMESTAMP_STEP);
+                            next_rtp_send_deadline = Some(Instant::now() + RTP_PACKET_INTERVAL);
                         }
                     }
                     Some(PipelineEvent::SessionEnd { .. }) | None => {
@@ -350,9 +372,22 @@ async fn run_bridge(
 // Helpers
 // ---------------------------------------------------------------------------
 
-async fn cleanup(rest: &AriRestClient, bridge_id: &str, channel_id: &str) {
+async fn cleanup(
+    rest: &AriRestClient,
+    bridge_id: &str,
+    channel_id: &str,
+    external_media_channel_id: Option<&str>,
+) {
     if let Err(e) = rest.destroy_bridge(bridge_id).await {
         warn!(bridge_id, "failed to destroy bridge: {}", e);
+    }
+    if let Some(external_media_channel_id) = external_media_channel_id {
+        if let Err(e) = rest.hangup_channel(external_media_channel_id).await {
+            warn!(
+                channel_id = external_media_channel_id,
+                "failed to hang up external media channel: {}", e
+            );
+        }
     }
     if let Err(e) = rest.hangup_channel(channel_id).await {
         warn!(channel_id, "failed to hang up channel: {}", e);
