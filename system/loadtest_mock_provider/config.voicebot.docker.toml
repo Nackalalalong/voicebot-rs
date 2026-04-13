@@ -17,7 +17,7 @@ energy_threshold = 0.001
 primary = "speaches"
 
 [asr.speaches]
-base_url = "http://host.docker.internal:8000"
+base_url = "http://localhost:8000"
 model = "mock-asr"
 language = "en"
 
@@ -25,14 +25,14 @@ language = "en"
 primary = "openai"
 
 [llm.openai]
-base_url = "http://host.docker.internal:8000"
+base_url = "http://localhost:8000"
 api_key = "mock"
 model = "mock-llm"
 max_tokens = 64
 temperature = 0.0
 
 [tts.speaches]
-base_url = "http://host.docker.internal:8000"
+base_url = "http://localhost:8000"
 model = "mock-tts"
 voice = "af_heart"
 
@@ -41,9 +41,9 @@ audio_ingress_capacity = 50
 event_bus_capacity = 200
 
 [asterisk]
-ari_host  = "127.0.0.1"
-ari_port  = 8088
-username  = "voicebot"
-password  = "voicebot"
-app_name  = "voicebot"
+ari_host = "127.0.0.1"
+ari_port = 8088
+username = "voicebot"
+password = "voicebot"
+app_name = "voicebot"
 audio_host = "127.0.0.1"

@@ -22,9 +22,8 @@ services:
             context: ../../voicebot
             dockerfile: ../system/loadtest_mock_provider/mock-provider/Dockerfile
         container_name: mock-provider
+        network_mode: service:asterisk
         restart: unless-stopped
-        ports:
-            - '8000:8000'
         healthcheck:
             test: ['CMD', 'curl', '--fail', 'http://localhost:8000/health']
             interval: 10s
