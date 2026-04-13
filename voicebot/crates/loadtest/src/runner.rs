@@ -36,7 +36,7 @@ pub async fn run_campaign(config: &LoadtestConfig) -> Result<CampaignSummary, Lo
 
     let normalized_audio = load_and_normalize_wav(&config.media.input_wav)?;
 
-    let campaign_id = Uuid::new_v4().to_string();
+    let campaign_id = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
     let campaign_dir = config.media.artifact_dir.join(&campaign_id);
     let calls_dir = campaign_dir.join("calls");
     std::fs::create_dir_all(&calls_dir)?;
