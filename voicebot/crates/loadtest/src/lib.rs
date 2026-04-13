@@ -6,5 +6,5 @@ pub mod error;
 pub mod report;
 pub mod runner;
 
-pub use report::RunSummary;
-pub use runner::run_phase1;
+pub use report::{CallResult, CampaignSummary, RunSummary};
+pub use runner::{run_campaign, run_phase1};

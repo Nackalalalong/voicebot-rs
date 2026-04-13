@@ -16,6 +16,12 @@ target_endpoint = "Local/1000@dp_entry_call_in"
 caller_id = "voicebot-loadtest"
 settle_before_playback_ms = 500
 record_after_playback_ms = 3000
+# Campaign scheduler fields (Phase 2):
+concurrency = 1         # max simultaneous calls
+total_calls = 1         # set to 0 + soak_duration_secs for time-based soak
+soak_duration_secs = 0  # 0 = use total_calls
+ramp_up_ms = 0          # spread first N calls over this window
+call_rate_per_second = 0.0  # 0 = unlimited
 
 [media]
 input_wav = "tests/fixtures/audio/sample_speech.wav"
@@ -25,3 +31,4 @@ artifact_dir = "artifacts/loadtest"
 silence_threshold = 0.02
 window_ms = 20
 gap_threshold_ms = 250
+stutter_gap_ms = 200    # gaps shorter than this between voiced regions = stutter

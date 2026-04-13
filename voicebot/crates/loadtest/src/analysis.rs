@@ -12,6 +12,8 @@ pub struct CallAnalysis {
     pub first_response_ms: Option<u64>,
     pub longest_gap_ms: u64,
     pub gap_count_over_threshold: u32,
+    /// Short gaps (< stutter_gap_ms) between consecutive voiced regions — indicates choppy audio.
+    pub stutter_count: u32,
     pub voiced_regions: Vec<VoicedRegion>,
 }
 
@@ -74,6 +76,7 @@ pub fn analyze_received_audio(
 
     let mut longest_gap_ms = 0;
     let mut gap_count_over_threshold = 0;
+    let mut stutter_count = 0u32;
     for pair in voiced_regions.windows(2) {
         let previous = &pair[0];
         let next = &pair[1];
@@ -84,6 +87,9 @@ pub fn analyze_received_audio(
         if gap_ms >= config.gap_threshold_ms {
             gap_count_over_threshold += 1;
         }
+        if gap_ms > 0 && gap_ms < config.stutter_gap_ms {
+            stutter_count += 1;
+        }
     }
 
     CallAnalysis {
@@ -93,6 +99,7 @@ pub fn analyze_received_audio(
         first_response_ms,
         longest_gap_ms,
         gap_count_over_threshold,
+        stutter_count,
         voiced_regions,
     }
 }
@@ -137,6 +144,7 @@ mod tests {
                 silence_threshold: 0.02,
                 window_ms: 20,
                 gap_threshold_ms: 250,
+                stutter_gap_ms: 200,
             },
         );
 

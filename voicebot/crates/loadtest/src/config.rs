@@ -47,6 +47,21 @@ pub struct CampaignConfig {
     pub settle_before_playback_ms: u64,
     #[serde(default = "default_record_after_playback_ms")]
     pub record_after_playback_ms: u64,
+    /// Max simultaneous calls. Default: 1.
+    #[serde(default = "default_concurrency")]
+    pub concurrency: usize,
+    /// Stop after N calls. Default: 1. Set to 0 with soak_duration_secs > 0 for soak mode.
+    #[serde(default = "default_total_calls")]
+    pub total_calls: usize,
+    /// Stop after N seconds even if total_calls not reached. 0 = no time limit.
+    #[serde(default)]
+    pub soak_duration_secs: u64,
+    /// Spread first `concurrency` calls over this window (ms). 0 = no ramp-up.
+    #[serde(default)]
+    pub ramp_up_ms: u64,
+    /// Maximum calls per second across the campaign. 0.0 = unlimited.
+    #[serde(default)]
+    pub call_rate_per_second: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +79,9 @@ pub struct AnalysisConfig {
     pub window_ms: u32,
     #[serde(default = "default_gap_threshold_ms")]
     pub gap_threshold_ms: u64,
+    /// Gaps shorter than this between voiced regions are counted as stutters. Default: 200 ms.
+    #[serde(default = "default_stutter_gap_ms")]
+    pub stutter_gap_ms: u64,
 }
 
 impl Default for AnalysisConfig {
@@ -72,6 +90,7 @@ impl Default for AnalysisConfig {
             silence_threshold: default_silence_threshold(),
             window_ms: default_window_ms(),
             gap_threshold_ms: default_gap_threshold_ms(),
+            stutter_gap_ms: default_stutter_gap_ms(),
         }
     }
 }
@@ -123,6 +142,21 @@ impl LoadtestConfig {
         if self.campaign.target_endpoint.trim().is_empty() {
             return Err(LoadtestError::InvalidConfig(
                 "campaign.target_endpoint must be non-empty".into(),
+            ));
+        }
+        if self.campaign.concurrency == 0 {
+            return Err(LoadtestError::InvalidConfig(
+                "campaign.concurrency must be > 0".into(),
+            ));
+        }
+        if self.campaign.total_calls == 0 && self.campaign.soak_duration_secs == 0 {
+            return Err(LoadtestError::InvalidConfig(
+                "campaign: at least one of total_calls or soak_duration_secs must be > 0".into(),
+            ));
+        }
+        if self.campaign.call_rate_per_second < 0.0 {
+            return Err(LoadtestError::InvalidConfig(
+                "campaign.call_rate_per_second must be >= 0.0".into(),
             ));
         }
         if self.campaign.settle_before_playback_ms > 30_000 {
@@ -222,6 +256,18 @@ fn default_window_ms() -> u32 {
 
 fn default_gap_threshold_ms() -> u64 {
     250
+}
+
+fn default_concurrency() -> usize {
+    1
+}
+
+fn default_total_calls() -> usize {
+    1
+}
+
+fn default_stutter_gap_ms() -> u64 {
+    200
 }
 
 #[cfg(test)]

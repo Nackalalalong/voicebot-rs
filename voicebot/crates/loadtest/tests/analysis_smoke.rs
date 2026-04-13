@@ -21,6 +21,7 @@ fn analysis_detects_missing_response() {
             silence_threshold: 0.02,
             window_ms: 20,
             gap_threshold_ms: 250,
+            stutter_gap_ms: 200,
         },
     );
 
@@ -41,6 +42,7 @@ fn analysis_detects_response_after_tx_finishes() {
             silence_threshold: 0.02,
             window_ms: 20,
             gap_threshold_ms: 150,
+            stutter_gap_ms: 200,
         },
     );
 

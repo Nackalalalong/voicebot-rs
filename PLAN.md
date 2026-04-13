@@ -18,7 +18,7 @@
 | 8 | **Integration** — end-to-end with interrupt | ✅ Done | 8 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test, new-speech-cancels-previous-ASR regression |
 | 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root, ignored integration tests for ARI REST, WebSocket, endpoint status, and originate/hangup. |
 | 10 | **Observability** — metrics, config validation, fallbacks | ✅ Done | 2 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown, fallback provider wiring in `core::session`, session lifecycle metrics in `PipelineSession` |
-| 11 | **loadtest** — virtual phone load harness | 🟡 Partial | 5 | `voicebot-loadtest` crate added with Phase 1 outbound Asterisk external-media backend, WAV normalization, TX/RX artifact writing, summary JSON, and first-response / silence-gap analysis. Phase 2 explicitly targets `xphone` for native SIP registration and inbound/outbound virtual-phone behavior. |
+| 11 | **loadtest** — virtual phone load harness | 🟡 Partial | 8 | `voicebot-loadtest` crate: campaign scheduler (`run_campaign`, bounded concurrency, ramp-up, rate-limiting, soak mode), stutter scoring (`stutter_count` in `CallAnalysis`), per-call artifacts (rx WAV per call in `calls/{N:04}/`), Markdown + JSON campaign reports. Phase 2 SIP backend remains. |
 
 ---
 
@@ -121,9 +121,9 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 - [x] **Phone backend abstraction** — keep signaling/media backend behind a trait; do not hardwire the first implementation into core or `transport/asterisk`
 - [~] **Outbound mode** — single-call Asterisk external-media outbound flow implemented with WAV playback, RX recording, and summary output. SIP registration is deferred to Phase 2.
 - [ ] **Inbound mode** — register virtual phones, wait for inbound INVITE, answer automatically, run the same scripted conversation flow
-- [ ] **Campaign scheduler** — concurrency, ramp-up, call rate, retry policy, soak duration, stop conditions, seeded determinism
-- [~] **Audio scoring** — Phase 1 includes first-response latency, voiced/silence duration, and gap metrics. Stutter/smoothness scoring remains open.
-- [~] **Artifacts + reports** — Phase 1 writes normalized TX WAV, RX WAV, resolved config, and summary JSON. Markdown/HTML campaign reports remain open.
+- [x] **Campaign scheduler** — `run_campaign`: bounded concurrency, ramp-up, rate-limiting (`call_rate_per_second`), soak mode (`soak_duration_secs`); per-call subdirectory artifacts
+- [x] **Audio scoring** — `stutter_count` added to `CallAnalysis`; counts short inter-voiced-region gaps (< `stutter_gap_ms`)
+- [x] **Artifacts + reports** — per-call rx WAV in `calls/{N:04}/rx.wav`; `campaign.json` (JSON) + `report.md` (Markdown) with P50/P90/P99 first-response, avg gap, stutter totals
 - [ ] **Phase 2 native SIP backend** — implement virtual phone registration, inbound call handling, and reusable phone sessions with `xphone`
 
 ---
