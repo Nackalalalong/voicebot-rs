@@ -194,7 +194,11 @@ impl LlmProvider for OpenAiProvider {
                             tracing::trace!(index = index, id = ?tc.id, "LLM tool call delta");
 
                             if index >= MAX_PARALLEL_TOOL_CALLS {
-                                tracing::warn!(index = index, max = MAX_PARALLEL_TOOL_CALLS, "LLM tool call index out of bounds; skipping");
+                                tracing::warn!(
+                                    index = index,
+                                    max = MAX_PARALLEL_TOOL_CALLS,
+                                    "LLM tool call index out of bounds; skipping"
+                                );
                                 continue;
                             }
 

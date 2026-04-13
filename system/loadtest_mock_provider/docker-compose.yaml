@@ -1,0 +1,35 @@
+# Loadtest infrastructure: Asterisk + mock AI provider
+#
+# Voicebot server and voicebot-loadtest run on the HOST, not in Docker.
+# This keeps RTP/SIP routing simple: Asterisk sends audio to the host
+# via the Docker bridge IP (172.17.0.1).
+#
+# Usage (from project root):
+#   docker compose -f system/loadtest_mock_provider/docker-compose.yaml up -d
+
+services:
+    # ── Asterisk PBX ──────────────────────────────────────────────────────────
+    asterisk:
+        extends:
+            file: ../asterisk/docker-compose.yaml
+            service: tele
+
+    # ── Mock ASR / LLM / TTS provider ─────────────────────────────────────────
+    mock-provider:
+        build:
+            context: ../../voicebot
+            dockerfile: ../system/loadtest_mock_provider/mock-provider/Dockerfile
+        container_name: mock-provider
+        restart: unless-stopped
+        ports:
+            - '8000:8000'
+        healthcheck:
+            test: ['CMD', 'curl', '--fail', 'http://localhost:8000/health']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 5s
+
+volumes:
+    # Required by the extended asterisk service
+    tele-conf:

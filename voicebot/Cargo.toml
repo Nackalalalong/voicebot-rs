@@ -8,6 +8,7 @@ members = [
     "crates/tts",
     "crates/core",
     "crates/loadtest",
+    "crates/mock-provider",
     "crates/transport/websocket",
     "crates/transport/asterisk",
     "crates/server",
