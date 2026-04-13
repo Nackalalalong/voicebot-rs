@@ -19,6 +19,7 @@ pub struct BackendConfig {
     #[serde(default = "default_backend_kind")]
     pub kind: String,
     pub asterisk: Option<AsteriskBackendConfig>,
+    pub xphone: Option<XphoneBackendConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,9 +37,31 @@ pub struct AsteriskBackendConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XphoneBackendConfig {
+    pub sip_host: String,
+    #[serde(default = "default_sip_port")]
+    pub sip_port: u16,
+    #[serde(default = "default_sip_transport")]
+    pub transport: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_rtp_port_min")]
+    pub rtp_port_min: u16,
+    #[serde(default = "default_rtp_port_max")]
+    pub rtp_port_max: u16,
+    #[serde(default = "default_register_timeout_ms")]
+    pub register_timeout_ms: u64,
+    #[serde(default = "default_call_timeout_ms")]
+    pub call_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CampaignConfig {
     #[serde(default = "default_campaign_name")]
     pub name: String,
+    /// "outbound" (default) or "inbound".
+    #[serde(default = "default_mode")]
+    pub mode: String,
     #[serde(default = "default_target_endpoint")]
     pub target_endpoint: String,
     #[serde(default = "default_caller_id")]
@@ -62,6 +85,9 @@ pub struct CampaignConfig {
     /// Maximum calls per second across the campaign. 0.0 = unlimited.
     #[serde(default)]
     pub call_rate_per_second: f64,
+    /// Timeout (ms) waiting for each inbound INVITE in inbound mode. Default: 60 000.
+    #[serde(default = "default_inbound_timeout_ms")]
+    pub inbound_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,38 +136,33 @@ impl LoadtestConfig {
     }
 
     fn validate(&self) -> Result<(), LoadtestError> {
-        if self.backend.kind != "asterisk-external-media" {
-            return Err(LoadtestError::InvalidConfig(format!(
-                "unsupported backend.kind: {}",
-                self.backend.kind
-            )));
+        match self.backend.kind.as_str() {
+            "asterisk-external-media" => self.validate_asterisk_backend()?,
+            "xphone" => self.validate_xphone_backend()?,
+            other => {
+                return Err(LoadtestError::InvalidConfig(format!(
+                    "unsupported backend.kind: {}",
+                    other
+                )));
+            }
         }
-
-        let asterisk = self.backend.asterisk.as_ref().ok_or_else(|| {
-            LoadtestError::InvalidConfig(
-                "backend.kind is 'asterisk-external-media' but [backend.asterisk] is missing"
-                    .into(),
-            )
-        })?;
-
-        if asterisk.ari_host.trim().is_empty()
-            || asterisk.username.trim().is_empty()
-            || asterisk.password.trim().is_empty()
-            || asterisk.app_name.trim().is_empty()
-            || asterisk.audio_host.trim().is_empty()
-        {
+        match self.campaign.mode.as_str() {
+            "outbound" | "inbound" => {}
+            other => {
+                return Err(LoadtestError::InvalidConfig(format!(
+                    "unsupported campaign.mode: '{}' (expected 'outbound' or 'inbound')",
+                    other
+                )));
+            }
+        }
+        if self.campaign.mode == "inbound" && self.backend.kind != "xphone" {
             return Err(LoadtestError::InvalidConfig(
-                "backend.asterisk fields must be non-empty".into(),
+                "inbound mode is only supported with the 'xphone' backend".into(),
             ));
         }
-        if asterisk.accept_timeout_ms == 0 {
+        if self.campaign.mode == "outbound" && self.campaign.target_endpoint.trim().is_empty() {
             return Err(LoadtestError::InvalidConfig(
-                "backend.asterisk.accept_timeout_ms must be > 0".into(),
-            ));
-        }
-        if self.campaign.target_endpoint.trim().is_empty() {
-            return Err(LoadtestError::InvalidConfig(
-                "campaign.target_endpoint must be non-empty".into(),
+                "campaign.target_endpoint must be non-empty for outbound mode".into(),
             ));
         }
         if self.campaign.concurrency == 0 {
@@ -172,6 +193,58 @@ impl LoadtestConfig {
         if self.analysis.window_ms == 0 {
             return Err(LoadtestError::InvalidConfig(
                 "analysis.window_ms must be > 0".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_asterisk_backend(&self) -> Result<(), LoadtestError> {
+        let asterisk = self.backend.asterisk.as_ref().ok_or_else(|| {
+            LoadtestError::InvalidConfig(
+                "backend.kind is 'asterisk-external-media' but [backend.asterisk] is missing"
+                    .into(),
+            )
+        })?;
+        if asterisk.ari_host.trim().is_empty()
+            || asterisk.username.trim().is_empty()
+            || asterisk.password.trim().is_empty()
+            || asterisk.app_name.trim().is_empty()
+            || asterisk.audio_host.trim().is_empty()
+        {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.asterisk fields must be non-empty".into(),
+            ));
+        }
+        if asterisk.accept_timeout_ms == 0 {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.asterisk.accept_timeout_ms must be > 0".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_xphone_backend(&self) -> Result<(), LoadtestError> {
+        let xphone = self.backend.xphone.as_ref().ok_or_else(|| {
+            LoadtestError::InvalidConfig(
+                "backend.kind is 'xphone' but [backend.xphone] is missing".into(),
+            )
+        })?;
+        if xphone.sip_host.trim().is_empty()
+            || xphone.username.trim().is_empty()
+            || xphone.password.trim().is_empty()
+        {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.xphone: sip_host, username, password must be non-empty".into(),
+            ));
+        }
+        if xphone.rtp_port_min >= xphone.rtp_port_max {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.xphone: rtp_port_min must be < rtp_port_max".into(),
+            ));
+        }
+        if xphone.register_timeout_ms == 0 {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.xphone.register_timeout_ms must be > 0".into(),
             ));
         }
         Ok(())
@@ -270,6 +343,38 @@ fn default_stutter_gap_ms() -> u64 {
     200
 }
 
+fn default_mode() -> String {
+    "outbound".into()
+}
+
+fn default_inbound_timeout_ms() -> u64 {
+    60_000
+}
+
+fn default_sip_port() -> u16 {
+    5060
+}
+
+fn default_sip_transport() -> String {
+    "udp".into()
+}
+
+fn default_rtp_port_min() -> u16 {
+    20000
+}
+
+fn default_rtp_port_max() -> u16 {
+    20100
+}
+
+fn default_register_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_call_timeout_ms() -> u64 {
+    30_000
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +406,90 @@ mod tests {
         );
         assert_eq!(config.analysis.window_ms, 20);
         config.validate().expect("config should validate");
+    }
+
+    #[test]
+    fn parses_xphone_config_with_defaults() {
+        let config: LoadtestConfig = toml::from_str(
+            r#"
+                [backend]
+                kind = "xphone"
+
+                [backend.xphone]
+                sip_host = "localhost"
+                username = "voicebot"
+                password = "voicebot"
+
+                [campaign]
+
+                [media]
+                input_wav = "tests/fixtures/hello.wav"
+            "#,
+        )
+        .expect("xphone config should parse");
+
+        assert_eq!(config.backend.kind, "xphone");
+        let xphone = config.backend.xphone.as_ref().unwrap();
+        assert_eq!(xphone.sip_port, 5060);
+        assert_eq!(xphone.rtp_port_min, 20000);
+        assert_eq!(xphone.rtp_port_max, 20100);
+        assert_eq!(xphone.register_timeout_ms, 10_000);
+        assert_eq!(xphone.call_timeout_ms, 30_000);
+        config.validate().expect("xphone config should validate");
+    }
+
+    #[test]
+    fn parses_inbound_config() {
+        let config: LoadtestConfig = toml::from_str(
+            r#"
+                [backend]
+                kind = "xphone"
+
+                [backend.xphone]
+                sip_host = "localhost"
+                username = "voicebot"
+                password = "voicebot"
+
+                [campaign]
+                mode = "inbound"
+                target_endpoint = ""
+                total_calls = 5
+                inbound_timeout_ms = 30000
+
+                [media]
+                input_wav = "tests/fixtures/hello.wav"
+            "#,
+        )
+        .expect("inbound config should parse");
+
+        assert_eq!(config.campaign.mode, "inbound");
+        assert_eq!(config.campaign.inbound_timeout_ms, 30_000);
+        config.validate().expect("inbound config should validate");
+    }
+
+    #[test]
+    fn rejects_inbound_mode_with_asterisk_backend() {
+        let config: LoadtestConfig = toml::from_str(
+            r#"
+                [backend]
+                kind = "asterisk-external-media"
+
+                [backend.asterisk]
+                ari_host = "localhost"
+                username = "voicebot"
+                password = "voicebot"
+                audio_host = "172.17.0.1"
+
+                [campaign]
+                mode = "inbound"
+
+                [media]
+                input_wav = "tests/fixtures/hello.wav"
+            "#,
+        )
+        .expect("config should parse");
+
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("inbound mode is only supported"));
     }
 }

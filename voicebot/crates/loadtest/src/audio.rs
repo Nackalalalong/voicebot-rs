@@ -92,13 +92,17 @@ pub fn samples_to_pcm_bytes(samples: &[i16]) -> Vec<u8> {
     bytes
 }
 
-fn upsample_8k_to_16k(input: &[i16]) -> Vec<i16> {
+pub fn upsample_8k_to_16k(input: &[i16]) -> Vec<i16> {
     let mut output = Vec::with_capacity(input.len() * 2);
     for &sample in input {
         output.push(sample);
         output.push(sample);
     }
     output
+}
+
+pub fn downsample_16k_to_8k(input: &[i16]) -> Vec<i16> {
+    input.iter().step_by(2).copied().collect()
 }
 
 fn resample_to_16k(input: &[i16], input_rate: u32) -> Vec<i16> {
@@ -117,8 +121,8 @@ fn resample_to_16k(input: &[i16], input_rate: u32) -> Vec<i16> {
         let right_index = (left_index + 1).min(input.len() - 1);
         let fraction = source_position - left_index as f64;
 
-        let interpolated = input[left_index] as f64 * (1.0 - fraction)
-            + input[right_index] as f64 * fraction;
+        let interpolated =
+            input[left_index] as f64 * (1.0 - fraction) + input[right_index] as f64 * fraction;
         output.push(interpolated.round() as i16);
     }
 

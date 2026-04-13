@@ -1,6 +1,6 @@
 # PLAN — voicebot-rs
 
-> 74 tests passing + 13 ignored integration tests · 10 crates implemented · Milestones 1–5 and 7–10 complete, 6 partial, 11 partial
+> 89 tests passing + 16 ignored integration tests · 10 crates implemented · Milestones 1–5 and 7–11 complete, 6 partial
 
 ---
 
@@ -18,7 +18,7 @@
 | 8 | **Integration** — end-to-end with interrupt | ✅ Done | 8 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test, new-speech-cancels-previous-ASR regression |
 | 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root, ignored integration tests for ARI REST, WebSocket, endpoint status, and originate/hangup. |
 | 10 | **Observability** — metrics, config validation, fallbacks | ✅ Done | 2 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown, fallback provider wiring in `core::session`, session lifecycle metrics in `PipelineSession` |
-| 11 | **loadtest** — virtual phone load harness | 🟡 Partial | 8 | `voicebot-loadtest` crate: campaign scheduler (`run_campaign`, bounded concurrency, ramp-up, rate-limiting, soak mode), stutter scoring (`stutter_count` in `CallAnalysis`), per-call artifacts (rx WAV per call in `calls/{N:04}/`), Markdown + JSON campaign reports. Phase 2 SIP backend remains. |
+| 11 | **loadtest** — virtual phone load harness | ✅ Done | 12+3i | `voicebot-loadtest` crate: Asterisk external-media + xphone native SIP backends, outbound + inbound modes, campaign scheduler (concurrency, ramp-up, rate-limit, soak), stutter scoring, per-call artifacts, Markdown + JSON reports, 3 ignored xphone integration tests |
 
 ---
 
@@ -119,12 +119,12 @@ All providers use OpenAI-compatible APIs. Speaches implements these APIs locally
 
 - [x] **New package `crates/loadtest`** — library + CLI for campaign execution (`cargo run -p voicebot-loadtest -- ...`)
 - [x] **Phone backend abstraction** — keep signaling/media backend behind a trait; do not hardwire the first implementation into core or `transport/asterisk`
-- [~] **Outbound mode** — single-call Asterisk external-media outbound flow implemented with WAV playback, RX recording, and summary output. SIP registration is deferred to Phase 2.
-- [ ] **Inbound mode** — register virtual phones, wait for inbound INVITE, answer automatically, run the same scripted conversation flow
+- [x] **Outbound mode** — Asterisk external-media (Phase 1) and xphone native SIP (Phase 2) backends both support outbound calls with WAV playback, RX recording, and summary output
+- [x] **Inbound mode** — register virtual phones, wait for inbound INVITE via `on_incoming` callback, answer automatically, run the same scripted conversation flow; `campaign.mode = "inbound"` config, `Phase1InboundRequest`, xphone-only
 - [x] **Campaign scheduler** — `run_campaign`: bounded concurrency, ramp-up, rate-limiting (`call_rate_per_second`), soak mode (`soak_duration_secs`); per-call subdirectory artifacts
 - [x] **Audio scoring** — `stutter_count` added to `CallAnalysis`; counts short inter-voiced-region gaps (< `stutter_gap_ms`)
 - [x] **Artifacts + reports** — per-call rx WAV in `calls/{N:04}/rx.wav`; `campaign.json` (JSON) + `report.md` (Markdown) with P50/P90/P99 first-response, avg gap, stutter totals
-- [ ] **Phase 2 native SIP backend** — implement virtual phone registration, inbound call handling, and reusable phone sessions with `xphone`
+- [x] **Phase 2 native SIP backend** — `XphoneBackend` registers with Asterisk via `xphone` crate, places outbound calls with paced PCM playback, records RX audio, 8k↔16k resampling, spawn_blocking tokio bridge, 2 `#[ignore]` integration tests
 
 ---
 

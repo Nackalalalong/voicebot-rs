@@ -1,0 +1,35 @@
+[backend]
+kind = "xphone"
+
+[backend.xphone]
+sip_host = "localhost"
+sip_port = 5060
+transport = "udp"
+username = "voicebot"
+password = "voicebot"
+rtp_port_min = 20000
+rtp_port_max = 20100
+register_timeout_ms = 10000
+call_timeout_ms = 30000
+
+[campaign]
+name = "xphone-outbound"
+target_endpoint = "1000"
+caller_id = "voicebot-loadtest"
+settle_before_playback_ms = 500
+record_after_playback_ms = 3000
+concurrency = 1
+total_calls = 1
+soak_duration_secs = 0
+ramp_up_ms = 0
+call_rate_per_second = 0.0
+
+[media]
+input_wav = "tests/fixtures/audio/sample_speech.wav"
+artifact_dir = "artifacts/loadtest"
+
+[analysis]
+silence_threshold = 0.02
+window_ms = 20
+gap_threshold_ms = 250
+stutter_gap_ms = 200

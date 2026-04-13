@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use crate::analysis::analyze_received_audio;
 use crate::audio::{load_and_normalize_wav, write_wav};
-use crate::backend::{build_backend, Phase1Backend, Phase1CallRequest, Phase1CallResult};
+use crate::backend::{
+    build_backend, Phase1Backend, Phase1CallRequest, Phase1CallResult, Phase1InboundRequest,
+};
 use crate::config::LoadtestConfig;
 use crate::error::LoadtestError;
 use crate::report::{
@@ -48,8 +50,10 @@ pub async fn run_campaign(config: &LoadtestConfig) -> Result<CampaignSummary, Lo
         config.to_toml_string()?,
     )?;
 
-    let backend: Arc<dyn Phase1Backend> = Arc::from(build_backend(config)?);
+    let backend: Arc<dyn Phase1Backend> = Arc::from(build_backend(config).await?);
     let backend_name = backend.backend_name().to_string();
+    let is_inbound = config.campaign.mode == "inbound";
+    let inbound_timeout_ms = config.campaign.inbound_timeout_ms;
     let started_at = Instant::now();
 
     // --- Concurrent call loop ------------------------------------------------
@@ -103,16 +107,28 @@ pub async fn run_campaign(config: &LoadtestConfig) -> Result<CampaignSummary, Lo
             let idx = call_index;
             call_index += 1;
             let backend = Arc::clone(&backend);
-            let request = Phase1CallRequest {
-                target_endpoint: config.campaign.target_endpoint.clone(),
-                caller_id: config.campaign.caller_id.clone(),
-                tx_samples: normalized_audio.samples.clone(),
-                settle_before_playback_ms: config.campaign.settle_before_playback_ms,
-                record_after_playback_ms: config.campaign.record_after_playback_ms,
-            };
-            pending.push(tokio::spawn(async move {
-                (idx, backend.run_single_outbound_call(request).await)
-            }));
+            if is_inbound {
+                let inbound_request = Phase1InboundRequest {
+                    tx_samples: normalized_audio.samples.clone(),
+                    settle_before_playback_ms: config.campaign.settle_before_playback_ms,
+                    record_after_playback_ms: config.campaign.record_after_playback_ms,
+                    inbound_timeout_ms,
+                };
+                pending.push(tokio::spawn(async move {
+                    (idx, backend.run_single_inbound_call(inbound_request).await)
+                }));
+            } else {
+                let request = Phase1CallRequest {
+                    target_endpoint: config.campaign.target_endpoint.clone(),
+                    caller_id: config.campaign.caller_id.clone(),
+                    tx_samples: normalized_audio.samples.clone(),
+                    settle_before_playback_ms: config.campaign.settle_before_playback_ms,
+                    record_after_playback_ms: config.campaign.record_after_playback_ms,
+                };
+                pending.push(tokio::spawn(async move {
+                    (idx, backend.run_single_outbound_call(request).await)
+                }));
+            }
         } else if pending.is_empty() {
             // All calls spawned and all results collected.
             break;
@@ -220,7 +236,7 @@ pub async fn run_phase1(config: &LoadtestConfig) -> Result<RunSummary, LoadtestE
 
     write_wav(&tx_wav_path, &normalized_audio.samples)?;
 
-    let backend = build_backend(config)?;
+    let backend = build_backend(config).await?;
     let backend_result = backend
         .run_single_outbound_call(Phase1CallRequest {
             target_endpoint: config.campaign.target_endpoint.clone(),
