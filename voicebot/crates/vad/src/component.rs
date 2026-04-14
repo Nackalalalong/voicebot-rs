@@ -83,7 +83,9 @@ impl VadComponent {
                     is_speaking = true;
                     debug!(timestamp_ms = frame.timestamp_ms, "SpeechStarted");
                     if let Some(ref tx) = self.speech_state_tx {
-                        let _ = tx.try_send(true);
+                        if let Err(error) = tx.send(true).await {
+                            warn!(%error, "Failed to send speech state start");
+                        }
                     }
                     if let Err(e) = self
                         .event_tx
@@ -104,7 +106,9 @@ impl VadComponent {
                     voiced_ms = 0;
                     debug!(timestamp_ms = frame.timestamp_ms, "SpeechEnded");
                     if let Some(ref tx) = self.speech_state_tx {
-                        let _ = tx.try_send(false);
+                        if let Err(error) = tx.send(false).await {
+                            warn!(%error, "Failed to send speech state end");
+                        }
                     }
                     if let Err(e) = self
                         .event_tx
@@ -233,5 +237,31 @@ mod tests {
             result.is_err() || result.unwrap().is_none(),
             "expected no events for pure silence"
         );
+    }
+
+    #[tokio::test]
+    async fn test_vad_forwards_speech_state_side_channel() {
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(10);
+        let (speech_state_tx, mut speech_state_rx) = tokio::sync::mpsc::channel(10);
+        let cancel_token = CancellationToken::new();
+        let audio = TestAudioStream::speech_then_silence(440.0, 500, 1000, 0.5);
+
+        let mut vad = VadComponent::new(default_config(), event_tx, cancel_token)
+            .with_speech_state(speech_state_tx);
+        tokio::spawn(async move {
+            vad.run(Box::new(audio)).await;
+        });
+
+        let speaking = timeout(Duration::from_secs(2), speech_state_rx.recv())
+            .await
+            .expect("timeout waiting for speech start")
+            .expect("speech state channel closed");
+        assert!(speaking, "expected speech start side-channel event");
+
+        let speaking = timeout(Duration::from_secs(2), speech_state_rx.recv())
+            .await
+            .expect("timeout waiting for speech end")
+            .expect("speech state channel closed");
+        assert!(!speaking, "expected speech end side-channel event");
     }
 }

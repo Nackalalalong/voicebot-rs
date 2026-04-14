@@ -204,11 +204,19 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
     tracing::info!(%session_id, "new WebSocket connection");
 
     let (mut ws_sink, mut ws_stream) = ws.split();
+    let vad_config = app_config
+        .as_ref()
+        .map(|cfg| cfg.vad.clone())
+        .unwrap_or_default();
+    let channel_config = app_config
+        .as_ref()
+        .map(|cfg| cfg.channels.clone())
+        .unwrap_or_default();
 
     // Wait for session_start with 10s timeout
     let session_start = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        wait_for_session_start(&mut ws_stream, session_id),
+        wait_for_session_start(&mut ws_stream, session_id, vad_config),
     )
     .await
     {
@@ -224,10 +232,14 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
     };
 
     // Bounded channels between transport and pipeline:
-    // - audio_tx/rx: client PCM audio → VAD (capacity 50, drop on overflow)
-    // - egress_tx/rx: pipeline events → client WS frames (capacity 200)
-    let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(50);
-    let (egress_tx, mut egress_rx) = tokio::sync::mpsc::channel::<PipelineEvent>(200);
+    // - audio_tx/rx: client PCM audio → VAD/ASR fanout
+    // - egress_tx/rx: pipeline events → client WS frames
+    // Use configured capacities so load/perf runs can absorb the initial
+    // utterance burst without silently losing the first turn.
+    let (audio_tx, audio_rx) =
+        tokio::sync::mpsc::channel::<AudioFrame>(channel_config.audio_ingress_capacity);
+    let (egress_tx, mut egress_rx) =
+        tokio::sync::mpsc::channel::<PipelineEvent>(channel_config.event_bus_capacity);
 
     // Start pipeline session
     let session_result = match app_config {
@@ -253,6 +265,21 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
         }
     };
 
+    let session_ready = match serde_json::to_string(&ServerMessage::SessionReady) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::error!(%session_id, %error, "failed to encode session_ready");
+            session.terminate().await;
+            return;
+        }
+    };
+    if let Err(error) = ws_sink.send(Message::Text(session_ready.into())).await {
+        tracing::error!(%session_id, %error, "failed to send session_ready");
+        session.terminate().await;
+        return;
+    }
+    tracing::info!(%session_id, "session_ready sent");
+
     // Run bidirectional bridge
     run_ws_bridge(
         session_id,
@@ -274,6 +301,7 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
 async fn wait_for_session_start(
     ws_stream: &mut futures::stream::SplitStream<WebSocket>,
     session_id: Uuid,
+    vad_config: VadConfig,
 ) -> Result<WebSocketSessionStart, TransportError> {
     while let Some(msg) = ws_stream.next().await {
         match msg {
@@ -304,7 +332,7 @@ async fn wait_for_session_start(
                             asr_provider: AsrProviderType::from_str_loose(&asr),
                             tts_provider: TtsProviderType::from_str_loose(&tts),
                             llm_provider: LlmProviderType::OpenAi,
-                            vad_config: VadConfig::default(),
+                            vad_config,
                             system_prompt: None,
                         },
                         input_sample_rate,
@@ -366,8 +394,9 @@ async fn run_ws_bridge(
                         match decoder.decode(&bytes) {
                             Ok(frames) => {
                                 for frame in frames {
-                                    if audio_tx.try_send(frame).is_err() {
-                                        tracing::warn!(%session_id, "audio channel full, dropping frame");
+                                    if audio_tx.send(frame).await.is_err() {
+                                        tracing::debug!(%session_id, "audio channel closed, stopping websocket bridge");
+                                        return;
                                     }
                                 }
                             }

@@ -20,6 +20,8 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
+    #[serde(rename = "session_ready")]
+    SessionReady,
     #[serde(rename = "transcript_partial")]
     TranscriptPartial { text: String },
     #[serde(rename = "transcript_final")]
@@ -76,5 +78,8 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("transcript_final"));
         assert!(json.contains("hello"));
+
+        let ready = serde_json::to_string(&ServerMessage::SessionReady).unwrap();
+        assert!(ready.contains("session_ready"));
     }
 }

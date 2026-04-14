@@ -37,8 +37,8 @@ model = "mock-tts"
 voice = "af_heart"
 
 [channels]
-audio_ingress_capacity = 50
-event_bus_capacity = 200
+audio_ingress_capacity = 256
+event_bus_capacity = 256
 
 # asterisk section required by config parser even if not used
 [asterisk]

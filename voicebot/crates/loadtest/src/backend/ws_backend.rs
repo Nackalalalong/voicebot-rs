@@ -12,6 +12,7 @@ use crate::error::LoadtestError;
 
 const FRAME_SAMPLES: usize = 320;
 const FRAME_DURATION_MS: u64 = 20;
+const SESSION_READY_TIMEOUT_MS: u64 = 2_000;
 /// How many 20 ms silence frames to send after the speech payload so the
 /// server-side VAD can detect SpeechEnded and forward audio to ASR.
 /// 1 000 ms / 20 ms = 50 frames.
@@ -24,6 +25,8 @@ enum RxEvent {
     /// session start) at which this frame was received — used to place the
     /// chunk at the correct position in the final conversation timeline.
     Audio { arrival_ms: u64, samples: Vec<i16> },
+    /// Server signaled the pipeline is fully initialized and ready to accept audio.
+    SessionReady,
     /// Server sent `{"type":"tts_complete"}` — the current turn's TTS is done.
     TtsComplete,
 }
@@ -121,6 +124,10 @@ impl Phase1Backend for WsBackend {
                     }
                     Ok(Message::Text(text)) => {
                         debug!("ws rx: event: {}", text);
+                        if text.contains("\"session_ready\"") {
+                            let _ = rx_tx.send(RxEvent::SessionReady);
+                            continue;
+                        }
                         if text.contains("\"tts_complete\"") {
                             let _ = rx_tx.send(RxEvent::TtsComplete);
                         }
@@ -137,6 +144,33 @@ impl Phase1Backend for WsBackend {
                 }
             }
         });
+
+        let session_ready_deadline =
+            tokio::time::sleep(Duration::from_millis(SESSION_READY_TIMEOUT_MS));
+        tokio::pin!(session_ready_deadline);
+        loop {
+            tokio::select! {
+                _ = &mut session_ready_deadline => {
+                    warn!(%url, timeout_ms = SESSION_READY_TIMEOUT_MS, "ws: session_ready not received before timeout; proceeding anyway");
+                    break;
+                }
+                event = rx_rx.recv() => {
+                    match event {
+                        Some(RxEvent::SessionReady) => {
+                            debug!(%url, "ws: session_ready received");
+                            break;
+                        }
+                        Some(RxEvent::Audio { .. }) | Some(RxEvent::TtsComplete) => {
+                            // Ignore unexpected pre-turn events and keep waiting for readiness.
+                        }
+                        None => {
+                            warn!(%url, "ws: RX channel closed before session_ready; proceeding anyway");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         // ── Settle delay ──────────────────────────────────────────────────────
         if request.settle_before_playback_ms > 0 {
@@ -219,6 +253,7 @@ impl Phase1Backend for WsBackend {
                     }
                     event = rx_rx.recv() => {
                         match event {
+                            Some(RxEvent::SessionReady) => {}
                             Some(RxEvent::Audio { arrival_ms, samples }) => {
                                 if turn_audio.first_arrival_ms.is_none() {
                                     turn_audio.first_arrival_ms = Some(arrival_ms);

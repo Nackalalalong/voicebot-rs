@@ -9,7 +9,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +154,7 @@ impl Orchestrator {
                 debug!(session_id = %self.session_id, %text, %language, "ASR → FinalTranscript");
             }
             PipelineEvent::TtsAudioChunk { sequence, .. } => {
-                debug!(session_id = %self.session_id, sequence, "TTS → TtsAudioChunk");
+                trace!(session_id = %self.session_id, sequence, "TTS → TtsAudioChunk");
             }
             PipelineEvent::TtsComplete => {
                 debug!(session_id = %self.session_id, "TTS → TtsComplete");

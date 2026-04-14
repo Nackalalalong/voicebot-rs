@@ -405,7 +405,7 @@ impl PipelineSession {
         // Speech state channel: VAD sends true on SpeechStarted, false on SpeechEnded.
         // Using mpsc (not watch) so events are queued and never missed,
         // even if the fanout is busy sending audio frames.
-        let (speech_state_tx, mut speech_state_rx) = tokio::sync::mpsc::channel::<bool>(8);
+        let (speech_state_tx, mut speech_state_rx) = tokio::sync::mpsc::channel::<bool>(32);
         let (asr_done_tx, mut asr_done_rx) = tokio::sync::mpsc::channel::<u64>(8);
 
         // Fanout + per-utterance ASR spawner.
@@ -454,14 +454,14 @@ impl PipelineSession {
                                 next_turn_id += 1;
                                 let turn_id = next_turn_id;
                                 let (asr_tx, asr_rx) = tokio::sync::mpsc::channel::<AudioFrame>(200);
-                                for buffered in pre_buffer.drain(..) {
-                                    let _ = asr_tx.try_send(buffered);
-                                }
                                 let asr_clone = Arc::clone(&asr_for_fanout);
                                 let ev_tx = asr_event_tx.clone();
                                 let handler = Arc::clone(&asr_failure_handler);
                                 let asr_cancel = fanout_token.child_token();
                                 let asr_done = asr_done_tx.clone();
+                                for buffered in pre_buffer.drain(..) {
+                                    let _ = asr_tx.try_send(buffered);
+                                }
                                 current_asr = Some(ActiveAsrTurn {
                                     turn_id,
                                     audio_tx: Some(asr_tx),

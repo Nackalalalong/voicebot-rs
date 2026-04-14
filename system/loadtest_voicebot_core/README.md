@@ -23,6 +23,13 @@ Measures latency and audio quality of **voicebot-core** directly over WebSocket 
 system/loadtest_voicebot_core/start.sh
 ```
 
+For performance runs, leave `RUST_LOG` unset so the stack uses the compose default `info` level. If you need pipeline debugging, override it explicitly, for example:
+
+```bash
+RUST_LOG=info,voicebot_core=debug,asr=debug,tts=debug,agent=debug \
+system/loadtest_voicebot_core/start.sh
+```
+
 Or step by step:
 
 ```bash

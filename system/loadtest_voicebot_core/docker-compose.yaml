@@ -52,7 +52,7 @@ services:
         volumes:
             - ./config.voicebot.toml:/etc/voicebot/config.toml:ro
         environment:
-            - RUST_LOG=${RUST_LOG:-info,voicebot_core=debug,asr=debug,tts=debug,agent=debug}
+            - RUST_LOG=${RUST_LOG:-info}
         depends_on:
             mock-provider:
                 condition: service_healthy

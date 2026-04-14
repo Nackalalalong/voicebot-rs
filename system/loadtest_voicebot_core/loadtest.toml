@@ -14,11 +14,11 @@ turn_timeout_ms = 15000
 [campaign]
 name = "ws-core-loadtest"
 mode = "outbound"
-concurrency = 3
+concurrency = 30
 
 # Total sessions to run.  Set total_calls = 0 and soak_duration_secs > 0 for
 # indefinite soak testing.
-total_calls = 9
+total_calls = 90
 
 # Let the mock TTS finish before closing the session.
 settle_before_playback_ms = 0
