@@ -61,6 +61,39 @@ The dependency graph enforces the architecture:
 
 That separation matters. If `core` were allowed to know about WebSocket or ARI details, the session model would become tied to one ingress protocol. The code deliberately avoids that.
 
+Visual dependency map:
+
+```mermaid
+flowchart TD
+  common[common]
+  vad[vad]
+  asr[asr]
+  agent[agent]
+  tts[tts]
+  core[core]
+  ws[transport/websocket]
+  ari[transport/asterisk]
+  server[server]
+
+  common --> vad
+  common --> asr
+  common --> agent
+  common --> tts
+  common --> core
+  vad --> core
+  asr --> core
+  agent --> core
+  tts --> core
+  common --> ws
+  core --> ws
+  common --> ari
+  core --> ari
+  common --> server
+  core --> server
+  ws --> server
+  ari --> server
+```
+
 ## 3. The Main Runtime Model
 
 At runtime, the system is not a single global pipeline. It is a set of independent per-session pipelines.
@@ -90,6 +123,37 @@ This split is deliberate:
 - VAD runs continuously for the life of the session.
 - ASR is created per utterance because transcription naturally maps to a bounded speech segment.
 - LLM and TTS are created per turn because they must be cancellable on barge-in.
+
+Visual task model:
+
+```mermaid
+flowchart LR
+  transport[Transport ingress]
+  audio[Audio ingress channel]
+  fanout[Fanout task]
+  vad[VAD task]
+  eventbus[Event bus]
+  orch[Orchestrator task]
+  egress[Transport egress]
+
+  subgraph per_turn[Per-turn tasks]
+    asr[ASR task]
+    llm[LLM task]
+    tts[TTS task]
+  end
+
+  transport --> audio --> fanout
+  fanout --> vad
+  vad --> eventbus
+  eventbus --> orch
+  fanout --> asr
+  asr --> eventbus
+  orch --> llm
+  llm --> eventbus
+  orch --> tts
+  tts --> eventbus
+  eventbus --> egress
+```
 
 ## 4. Shared Contracts In `common`
 
@@ -275,6 +339,35 @@ So the actual logic is:
 
 This is a very pragmatic design. It avoids having ASR run continuously and it keeps the start of speech recoverable.
 
+Visual utterance capture flow:
+
+```mermaid
+sequenceDiagram
+  participant T as Transport
+  participant F as Fanout
+  participant V as VAD
+  participant A as ASR task
+
+  loop Continuous audio ingress
+    T->>F: AudioFrame
+    F->>F: Push into pre-buffer
+    F->>V: Forward frame
+  end
+
+  V-->>F: speech_state = true
+  F->>A: Spawn per-utterance ASR task
+  F->>A: Drain pre-buffer into ASR channel
+
+  loop While speech is active
+    T->>F: AudioFrame
+    F->>V: Forward frame
+    F->>A: Forward live frame
+  end
+
+  V-->>F: speech_state = false
+  F-->>A: Close ASR sender
+```
+
 ### 6.3 Per-Utterance ASR Tasks
 
 ASR is not a daemon task inside the session. It is a turn-local task.
@@ -327,6 +420,27 @@ Any + Cancel                  -> Idle
 ```
 
 The orchestrator does not interpret raw audio. It only reacts to semantic events from upstream components.
+
+Visual state machine:
+
+```mermaid
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Listening: session active
+  Listening --> Transcribing: SpeechEnded
+  Transcribing --> AgentThinking: FinalTranscript
+  AgentThinking --> Speaking: first TTS chunk
+  Speaking --> Idle: TtsComplete
+
+  Transcribing --> Listening: SpeechStarted / cancel old ASR
+  AgentThinking --> Listening: SpeechStarted / cancel LLM + TTS
+  Speaking --> Listening: SpeechStarted / cancel TTS
+
+  Listening --> Idle: Cancel
+  Transcribing --> Idle: Cancel
+  AgentThinking --> Idle: Cancel
+  Speaking --> Idle: Cancel or Interrupt
+```
 
 ### 7.2 Forwarding Policy
 
@@ -836,6 +950,30 @@ Browser mic PCM
 
 At the same time, the browser also receives JSON text frames for transcript and agent textual state.
 
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as WS transport
+    participant D as Decoder/resampler
+    participant P as PipelineSession
+    participant O as Orchestrator
+    participant A as ASR
+    participant G as Agent/LLM
+    participant T as TTS
+
+    B->>W: session_start + binary PCM
+    W->>D: decode and normalize audio
+    D->>P: AudioFrame ingress
+    P->>A: per-utterance audio after VAD gating
+    A-->>O: FinalTranscript
+    O->>G: trigger_agent
+    G-->>O: AgentPartialResponse stream
+    O->>T: sentence chunks
+    T-->>W: TtsAudioChunk
+    W-->>B: binary PCM audio
+    W-->>B: JSON transcript and agent events
+```
+
 ### 16.2 Asterisk Call Flow
 
 ```text
@@ -853,6 +991,26 @@ PSTN/SIP caller
 ```
 
 This is the same logical pipeline with a different ingress and egress adapter.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant X as Asterisk
+    participant R as ARI transport
+    participant P as PipelineSession
+    participant Core as VAD/ASR/Agent/TTS
+
+    C->>X: inbound SIP/PSTN call
+    X->>R: StasisStart
+    R->>X: answer + externalMedia + bridge
+    X->>R: AudioSocket TCP media stream
+    R->>P: AudioFrame ingress
+    P->>Core: turn processing
+    Core-->>P: TtsAudioChunk
+    P-->>R: audio egress events
+    R-->>X: AudioSocket PCM packets
+    X-->>C: bridged synthesized audio
+```
 
 ## 17. Important Realities For Contributors
 
@@ -882,3 +1040,16 @@ Layer 3, orchestrator: own conversation turn state and decide what happens next.
 Layer 4, providers: convert canonical requests into external API calls and convert responses back into `PipelineEvent`.
 
 That separation is what keeps the system understandable. Once you see that the fanout task owns utterance capture, the orchestrator owns turn state, and transports only adapt I/O, most of the rest of the code becomes predictable.
+
+One last compact mental model:
+
+```mermaid
+flowchart LR
+  ingress[Transport ingress] --> session[PipelineSession]
+  session --> fanout[Fanout + VAD gating]
+  fanout --> orchestrator[Orchestrator]
+  orchestrator --> providers[ASR / LLM / TTS providers]
+  providers --> egress[Transport egress]
+  orchestrator -. cancellation .-> providers
+  fanout -. speech boundaries .-> orchestrator
+```
