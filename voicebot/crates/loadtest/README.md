@@ -4,11 +4,11 @@ Phase 1 loadtest harness for the voicebot stack.
 
 Current scope:
 
-- one outbound call at a time
-- Asterisk external-media backend
+- multi-call campaign execution with configurable concurrency/rate/ramp
+- Asterisk, WebSocket, and xphone backends
 - normalized WAV playback into the call
 - received-audio recording
-- summary JSON with first-response and silence-gap metrics
+- campaign JSON plus Markdown and HTML reports with first-response, gap, and outcome insights
 
 Current non-goals:
 
@@ -36,7 +36,7 @@ The sample config uses:
 
 Phase 1 currently uses ARI `externalMedia` in the supported RTP/UDP mode. The loadtest backend controls the Local channel leg in its own Stasis app, while the far leg reaches `Stasis(voicebot)` through the existing dialplan.
 
-Artifacts are written under `artifacts/loadtest/<run_id>/`.
+Artifacts are written under `artifacts/loadtest/<run_id>/`, including `campaign.json`, `report.md`, and `report.html`.
 
 ## Phase 2 Direction
 

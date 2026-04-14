@@ -40,7 +40,10 @@ async fn main() {
             }
             println!("avg_longest_gap_ms: {}", summary.avg_longest_gap_ms);
             println!("total_stutter_count: {}", summary.total_stutter_count);
-            println!("report: {}/report.md", summary.artifact_dir);
+            println!(
+                "reports: {}/report.md and {}/report.html",
+                summary.artifact_dir, summary.artifact_dir
+            );
         }
         Err(error) => {
             eprintln!("FATAL: campaign failed: {error}");

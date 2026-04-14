@@ -130,9 +130,7 @@ impl Phase1Backend for AsteriskExternalMediaBackend {
             .map_err(|_| {
                 LoadtestError::Timeout("timed out waiting for RTP reader task".into())
             })???;
-        let connect_ms = reader_result
-            .first_packet_at_ms
-            .unwrap_or(tx_started_at_ms);
+        let connect_ms = reader_result.first_packet_at_ms.unwrap_or(tx_started_at_ms);
 
         Ok(Phase1CallResult {
             connect_ms,
@@ -392,20 +390,32 @@ fn channel_id_from_body(body: &serde_json::Value) -> Result<String, LoadtestErro
         .ok_or_else(|| LoadtestError::Protocol("ARI response missing 'id'".into()))
 }
 
-fn external_media_from_body(body: &serde_json::Value) -> Result<ExternalMediaChannel, LoadtestError> {
+fn external_media_from_body(
+    body: &serde_json::Value,
+) -> Result<ExternalMediaChannel, LoadtestError> {
     let channel_id = channel_id_from_body(body)?;
     let channelvars = body
         .get("channelvars")
         .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| LoadtestError::Protocol("ARI externalMedia response missing channelvars".into()))?;
+        .ok_or_else(|| {
+            LoadtestError::Protocol("ARI externalMedia response missing channelvars".into())
+        })?;
     let local_address = channelvars
         .get("UNICASTRTP_LOCAL_ADDRESS")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| LoadtestError::Protocol("ARI externalMedia response missing UNICASTRTP_LOCAL_ADDRESS".into()))?;
+        .ok_or_else(|| {
+            LoadtestError::Protocol(
+                "ARI externalMedia response missing UNICASTRTP_LOCAL_ADDRESS".into(),
+            )
+        })?;
     let local_port = channelvars
         .get("UNICASTRTP_LOCAL_PORT")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| LoadtestError::Protocol("ARI externalMedia response missing UNICASTRTP_LOCAL_PORT".into()))?;
+        .ok_or_else(|| {
+            LoadtestError::Protocol(
+                "ARI externalMedia response missing UNICASTRTP_LOCAL_PORT".into(),
+            )
+        })?;
     let remote_addr = format!("{}:{}", local_address, local_port)
         .parse()
         .map_err(|error| {
@@ -483,7 +493,8 @@ async fn play_audio(
     let seed = Uuid::new_v4();
     let seed_bytes = seed.as_bytes();
     let mut sequence = u16::from_be_bytes([seed_bytes[0], seed_bytes[1]]);
-    let mut timestamp = u32::from_be_bytes([seed_bytes[2], seed_bytes[3], seed_bytes[4], seed_bytes[5]]);
+    let mut timestamp =
+        u32::from_be_bytes([seed_bytes[2], seed_bytes[3], seed_bytes[4], seed_bytes[5]]);
     let ssrc = u32::from_be_bytes([seed_bytes[6], seed_bytes[7], seed_bytes[8], seed_bytes[9]]);
 
     for chunk in ulaw_samples.chunks(RTP_FRAME_SAMPLES_ULAW) {
@@ -533,7 +544,8 @@ fn parse_rtp_payload(packet: &[u8]) -> Option<&[u8]> {
         if packet.len() < offset + 4 {
             return None;
         }
-        let extension_length_words = u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]) as usize;
+        let extension_length_words =
+            u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]) as usize;
         offset += 4 + (extension_length_words * 4);
         if packet.len() < offset {
             return None;

@@ -16,15 +16,15 @@ use crate::backend::{
 use crate::config::LoadtestConfig;
 use crate::error::LoadtestError;
 use crate::report::{
-    write_campaign_report_md, write_campaign_summary_json, write_summary_json, CallResult,
-    CampaignSummary, RunSummary,
+    write_campaign_report_html, write_campaign_report_md, write_campaign_summary_json,
+    write_summary_json, CallResult, CampaignSummary, RunSummary,
 };
 
 // ── Campaign runner ───────────────────────────────────────────────────────────
 
 /// Run a full multi-call campaign with concurrency, rate limiting, and ramp-up.
-/// Writes per-call rx WAVs, a campaign JSON summary, and a Markdown report to
-/// `{artifact_dir}/{campaign_id}/`.
+/// Writes per-call rx WAVs, a campaign JSON summary, and Markdown plus HTML
+/// reports to `{artifact_dir}/{campaign_id}/`.
 pub async fn run_campaign(config: &LoadtestConfig) -> Result<CampaignSummary, LoadtestError> {
     let concurrency = config.campaign.concurrency;
     let total_calls = config.campaign.total_calls; // 0 = unlimited (soak mode)
@@ -204,6 +204,7 @@ pub async fn run_campaign(config: &LoadtestConfig) -> Result<CampaignSummary, Lo
 
     write_campaign_summary_json(&campaign_dir.join("campaign.json"), &summary)?;
     write_campaign_report_md(&campaign_dir.join("report.md"), &summary)?;
+    write_campaign_report_html(&campaign_dir.join("report.html"), &summary)?;
 
     Ok(summary)
 }

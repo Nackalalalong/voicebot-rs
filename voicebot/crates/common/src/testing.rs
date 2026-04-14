@@ -144,14 +144,17 @@ mod tests {
         let mut stream = TestAudioStream::sine(440.0, 100, 0.5);
         let frame = stream.recv().await.unwrap();
         let max_sample = frame.data.iter().map(|s| s.abs()).max().unwrap();
-        assert!(max_sample > 1000, "sine wave should have significant energy");
+        assert!(
+            max_sample > 1000,
+            "sine wave should have significant energy"
+        );
     }
 
     #[tokio::test]
     async fn test_speech_then_silence() {
         let mut stream = TestAudioStream::speech_then_silence(440.0, 100, 100, 0.5);
         assert_eq!(stream.frame_count(), 10); // 5 speech + 5 silence
-        // First frames should have energy
+                                              // First frames should have energy
         let first = stream.recv().await.unwrap();
         let max = first.data.iter().map(|s| s.abs()).max().unwrap();
         assert!(max > 0);

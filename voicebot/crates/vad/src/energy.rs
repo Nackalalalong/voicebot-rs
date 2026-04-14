@@ -3,7 +3,13 @@ pub fn rms_energy(samples: &[i16]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-    let sum_sq: f64 = samples.iter().map(|&s| { let v = s as f64; v * v }).sum();
+    let sum_sq: f64 = samples
+        .iter()
+        .map(|&s| {
+            let v = s as f64;
+            v * v
+        })
+        .sum();
     ((sum_sq / samples.len() as f64).sqrt() / i16::MAX as f64) as f32
 }
 
