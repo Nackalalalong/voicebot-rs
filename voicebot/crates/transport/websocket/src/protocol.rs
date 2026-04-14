@@ -22,6 +22,8 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     #[serde(rename = "session_ready")]
     SessionReady,
+    #[serde(rename = "speech_started")]
+    SpeechStarted { timestamp_ms: u64 },
     #[serde(rename = "transcript_partial")]
     TranscriptPartial { text: String },
     #[serde(rename = "transcript_final")]
@@ -81,5 +83,10 @@ mod tests {
 
         let ready = serde_json::to_string(&ServerMessage::SessionReady).unwrap();
         assert!(ready.contains("session_ready"));
+
+        let speech_started =
+            serde_json::to_string(&ServerMessage::SpeechStarted { timestamp_ms: 123 }).unwrap();
+        assert!(speech_started.contains("speech_started"));
+        assert!(speech_started.contains("123"));
     }
 }

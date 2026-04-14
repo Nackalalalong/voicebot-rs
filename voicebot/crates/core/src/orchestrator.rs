@@ -166,6 +166,8 @@ impl Orchestrator {
             // Valid transitions
             (OrchestratorState::Idle, PipelineEvent::SpeechStarted { .. }) => {
                 self.state = OrchestratorState::Listening;
+                let _ = self.egress_tx.send(event).await;
+                return;
             }
             (OrchestratorState::Listening, PipelineEvent::SpeechEnded { .. }) => {
                 self.state = OrchestratorState::Transcribing;
@@ -188,6 +190,7 @@ impl Orchestrator {
                 self.cancel_active_tasks().await;
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
+                let _ = self.egress_tx.send(event).await;
                 return;
             }
 
@@ -249,6 +252,7 @@ impl Orchestrator {
                 self.cancel_active_tasks().await;
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
+                let _ = self.egress_tx.send(event).await;
                 return;
             }
 
@@ -258,6 +262,7 @@ impl Orchestrator {
                 self.cancel_active_tasks().await;
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
+                let _ = self.egress_tx.send(event).await;
                 return;
             }
 
@@ -512,6 +517,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_speech_started_is_forwarded_to_egress() {
+        let (mut orch, event_tx, mut egress_rx, cancel_token) = create_orchestrator().await;
+
+        event_tx
+            .send(PipelineEvent::SpeechStarted { timestamp_ms: 42 })
+            .await
+            .expect("send failed");
+        drop(event_tx);
+
+        timeout(Duration::from_secs(2), orch.run())
+            .await
+            .expect("orchestrator timed out");
+
+        let forwarded = egress_rx
+            .try_recv()
+            .expect("expected speech_started on egress");
+        assert!(matches!(
+            forwarded,
+            PipelineEvent::SpeechStarted { timestamp_ms: 42 }
+        ));
+        assert_eq!(orch.state(), OrchestratorState::Listening);
+        cancel_token.cancel();
+    }
+
+    #[tokio::test]
     async fn test_orchestrator_full_cycle() {
         let (mut orch, event_tx, _egress_rx, cancel_token) = create_orchestrator().await;
 
@@ -758,7 +788,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_barge_in_during_speaking() {
-        let (mut orch, event_tx, _egress_rx, cancel_token) = create_orchestrator().await;
+        let (mut orch, event_tx, mut egress_rx, cancel_token) = create_orchestrator().await;
 
         // Drive to Speaking state
         event_tx
@@ -794,7 +824,16 @@ mod tests {
             .await
             .expect("orchestrator timed out");
 
+        let mut saw_barge_in = false;
+        while let Ok(event) = egress_rx.try_recv() {
+            if matches!(event, PipelineEvent::SpeechStarted { timestamp_ms: 1000 }) {
+                saw_barge_in = true;
+                break;
+            }
+        }
+
         // Barge-in should leave us in Listening (ready for new speech)
+        assert!(saw_barge_in, "expected barge-in speech_started on egress");
         assert_eq!(orch.state(), OrchestratorState::Listening);
         cancel_token.cancel();
     }

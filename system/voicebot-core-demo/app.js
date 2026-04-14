@@ -35,6 +35,8 @@ let playbackQueueOffset = 0;
 let playbackQueuedSamples = 0;
 let playbackPrimed = false;
 let playbackStreamOpen = false;
+let dropTtsAudioUntilNextResponse = false;
+const DEBUG_EVENTS = true;
 const PLAYBACK_BUFFER_SIZE = 2048;
 const PREBUFFER_MS = 400; // accumulate 400ms before starting to avoid underruns
 
@@ -73,6 +75,19 @@ function updateMessageText(msgEl, text, isPartial) {
     content.textContent = text;
     content.className = isPartial ? 'partial' : '';
 }
+
+function logDebugEvent(label, details) {
+    if (!DEBUG_EVENTS) return;
+
+    if (details === undefined) {
+        console.log(`[voicebot-demo] ${label}`);
+        return;
+    }
+
+    console.log(`[voicebot-demo] ${label}`, details);
+}
+
+logDebugEvent('app_loaded');
 
 function ensurePlaybackEngine() {
     if (!playbackCtx) {
@@ -137,6 +152,25 @@ function resetPlaybackQueue() {
     playbackStreamOpen = false;
 }
 
+function interruptBotPlayback(reason = 'unknown') {
+    if (currentBotMsg) {
+        const content = currentBotMsg.querySelector('div:last-child');
+        const finalText = currentBotMsg._fullText || content?.textContent || '';
+        updateMessageText(currentBotMsg, finalText, false);
+        currentBotMsg._fullText = finalText;
+        currentBotMsg = null;
+    }
+
+    currentTtsChunks = [];
+    resetPlaybackQueue();
+    dropTtsAudioUntilNextResponse = true;
+    logDebugEvent('interrupt_bot_playback', {reason});
+}
+
+function isBotPlaybackActive() {
+    return currentBotMsg !== null || playbackQueuedSamples > 0 || playbackStreamOpen;
+}
+
 // --- WebSocket ---
 function connect() {
     if (ws) {
@@ -154,6 +188,7 @@ function connect() {
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
+        logDebugEvent('ws_open', {url});
         setStatus('connected', 'Connected');
         btnConnect.textContent = 'Disconnect';
         btnConnect.classList.add('active');
@@ -161,26 +196,38 @@ function connect() {
         addSystemMessage('Connected to server');
 
         // Send session_start
-        ws.send(
-            JSON.stringify({
-                type: 'session_start',
-                language: languageSelect.value,
-                asr: 'speaches',
-                tts: 'speaches',
-                sample_rate: Math.round(audioCtx?.sampleRate || SAMPLE_RATE),
-            }),
-        );
+        const sessionStart = {
+            type: 'session_start',
+            language: languageSelect.value,
+            asr: 'speaches',
+            tts: 'speaches',
+            sample_rate: Math.round(audioCtx?.sampleRate || SAMPLE_RATE),
+        };
+        logDebugEvent('client:session_start', sessionStart);
+        ws.send(JSON.stringify(sessionStart));
     };
 
     ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
-            handleServerText(JSON.parse(event.data));
+            const msg = JSON.parse(event.data);
+            logDebugEvent(`server:${msg.type}`, msg);
+            handleServerText(msg);
         } else {
+            logDebugEvent('server:audio_chunk', {
+                bytes: event.data.byteLength,
+                dropped: dropTtsAudioUntilNextResponse,
+                queuedSamples: playbackQueuedSamples,
+            });
             handleServerAudio(event.data);
         }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+        logDebugEvent('ws_close', {
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+        });
         setStatus('disconnected', 'Disconnected');
         btnConnect.textContent = 'Connect';
         btnConnect.classList.remove('active');
@@ -191,12 +238,14 @@ function connect() {
     };
 
     ws.onerror = () => {
+        logDebugEvent('ws_error');
         addSystemMessage('Connection error');
     };
 }
 
 function disconnect() {
     if (ws) {
+        logDebugEvent('client:session_end');
         ws.send(JSON.stringify({type: 'session_end'}));
         ws.close();
     }
@@ -205,6 +254,13 @@ function disconnect() {
 
 function handleServerText(msg) {
     switch (msg.type) {
+        case 'speech_started':
+            if (isBotPlaybackActive()) {
+                interruptBotPlayback('speech_started');
+            }
+            setStatus('listening', 'Listening...');
+            break;
+
         case 'transcript_partial':
             if (!currentUserMsg) {
                 currentUserMsg = addMessage('user', msg.text, true);
@@ -225,6 +281,7 @@ function handleServerText(msg) {
             break;
 
         case 'agent_partial':
+            dropTtsAudioUntilNextResponse = false;
             if (!currentBotMsg) {
                 currentBotMsg = addMessage('bot', msg.text, true);
                 currentBotMsg._fullText = msg.text;
@@ -237,10 +294,13 @@ function handleServerText(msg) {
             break;
 
         case 'agent_final':
+            dropTtsAudioUntilNextResponse = false;
             if (currentBotMsg) {
                 updateMessageText(currentBotMsg, msg.text, false);
+                currentBotMsg._fullText = msg.text;
             } else {
                 currentBotMsg = addMessage('bot', msg.text, false);
+                currentBotMsg._fullText = msg.text;
                 currentTtsChunks = [];
             }
             setStatus('speaking', 'Speaking...');
@@ -265,6 +325,11 @@ function handleServerText(msg) {
 
 // --- Audio playback ---
 function handleServerAudio(arrayBuffer) {
+    if (dropTtsAudioUntilNextResponse) {
+        logDebugEvent('drop_audio_chunk', {bytes: arrayBuffer.byteLength});
+        return;
+    }
+
     currentTtsChunks.push(arrayBuffer);
     ensurePlaybackEngine();
 

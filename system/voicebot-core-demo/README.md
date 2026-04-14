@@ -69,6 +69,7 @@ Chat UI ← JSON text frames ← Transcripts + Agent responses
 
 **Server → Client:**
 
+- `{"type":"speech_started","timestamp_ms":1234}` — VAD detected the user has started speaking; client should interrupt any stale bot playback
 - `{"type":"transcript_partial","text":"..."}` — partial ASR result
 - `{"type":"transcript_final","text":"..."}` — final ASR result
 - `{"type":"agent_partial","text":"..."}` — streaming agent response

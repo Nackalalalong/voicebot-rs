@@ -441,15 +441,22 @@ async fn run_ws_bridge(
 }
 
 /// Translate a `PipelineEvent` into a WebSocket frame and send it.
+/// - VAD speech-start notifications → JSON text frames
 /// - Transcripts & agent responses → JSON text frames
 /// - TTS audio chunks → binary PCM frames
 /// - Component errors → JSON error frames
-/// - Internal events (SpeechStarted, Cancel, etc.) are silently dropped.
+/// - Other internal events (Cancel, Flush, Replace, etc.) are silently dropped.
 async fn send_pipeline_event(
     sink: &mut futures::stream::SplitSink<WebSocket, Message>,
     event: PipelineEvent,
 ) -> Result<(), TransportError> {
     match event {
+        PipelineEvent::SpeechStarted { timestamp_ms } => {
+            let msg = ServerMessage::SpeechStarted { timestamp_ms };
+            let json = serde_json::to_string(&msg)
+                .map_err(|e| TransportError::InvalidJson(e.to_string()))?;
+            sink.send(Message::Text(json.into())).await?;
+        }
         PipelineEvent::PartialTranscript { text, .. } => {
             let msg = ServerMessage::TranscriptPartial { text };
             let json = serde_json::to_string(&msg)
