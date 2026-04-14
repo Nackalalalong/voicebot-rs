@@ -202,9 +202,15 @@ Important details:
 - validation is fail-fast
 - provider sections are checked against `primary` selections
 
-Not everything in `AppConfig` is currently wired into runtime behavior. For example, the config has `channels.audio_ingress_capacity` and `channels.event_bus_capacity`, but the current code still hardcodes the session channel capacities in transport and core code.
+Not everything in `AppConfig` is currently wired into runtime behavior, but this is no longer true for the WebSocket transport edge.
 
-That means the config shape is slightly ahead of the runtime implementation.
+In particular:
+
+- the WebSocket transport now uses `channels.audio_ingress_capacity` and `channels.event_bus_capacity`
+- the WebSocket transport also inherits app-level VAD settings when building `SessionConfig`
+- several internal core-session queues are still hardcoded in `crates/core/src/session.rs`
+
+So the config shape is still slightly ahead of the full runtime implementation, but the most important transport-side channel knobs are now live.
 
 ## 6. What A Session Actually Looks Like
 
@@ -222,14 +228,14 @@ There are three main logical layers inside the session:
 
 The session uses several bounded channels, each with a different purpose:
 
-- transport audio ingress: `mpsc<AudioFrame>(50)`
+- WebSocket transport audio ingress: `mpsc<AudioFrame>(ChannelConfig::audio_ingress_capacity)`
 - session event bus: `mpsc<PipelineEvent>(200)`
 - fanout to VAD: `mpsc<AudioFrame>(16)`
-- VAD speech state side-channel: `mpsc<bool>(8)`
+- VAD speech state side-channel: `mpsc<bool>(32)`
 - ASR completion side-channel: `mpsc<u64>(8)`
 - per-utterance ASR audio channel: `mpsc<AudioFrame>(200)`
 - sentence-to-TTS text channel: `mpsc<String>(20)`
-- transport egress: `mpsc<PipelineEvent>(200)`
+- WebSocket transport egress: `mpsc<PipelineEvent>(ChannelConfig::event_bus_capacity)`
 
 This is worth understanding in detail.
 
@@ -238,6 +244,8 @@ The code does not use one giant event queue for everything. Instead it separates
 - raw audio
 - semantic events
 - control side-channels used only for coordination
+
+One practical consequence is that the outer transport queues are now config-driven, while several inner coordination queues are still fixed-size by design.
 
 That separation keeps the event bus readable and avoids pushing high-volume PCM through the same path as state-machine events.
 
@@ -439,6 +447,8 @@ The VAD task emits output on two paths:
 
 That side-channel matters because fanout needs speech state immediately to gate ASR capture. Using a dedicated channel avoids coupling that timing to the event bus consumer.
 
+In the current implementation, VAD sends those side-channel state changes with awaited `send()` rather than `try_send()`. That is an intentional reliability choice: speech-start and speech-end gating is control-plane traffic, so silently dropping it is worse than briefly backpressuring VAD.
+
 ## 9. ASR: Per-Utterance Transcription
 
 ### 9.1 Provider Construction
@@ -598,7 +608,8 @@ For each new socket connection:
 2. it waits up to 10 seconds for a `session_start` message
 3. it creates audio and egress channels
 4. it starts a `PipelineSession`
-5. it bridges WebSocket frames to pipeline channels until disconnect
+5. it sends a `session_ready` JSON message once the pipeline is initialized
+6. it bridges WebSocket frames to pipeline channels until disconnect
 
 This is a useful architectural boundary to remember: session identity is transport-owned at creation time, not core-owned.
 
@@ -608,10 +619,10 @@ The effective protocol is:
 
 - client to server
     - JSON text frames for `session_start` and `session_end`
-    - binary PCM frames for microphone audio
+        - binary PCM frames for microphone audio
 - server to client
-    - JSON text frames for transcript, agent text, completion, and errors
-    - binary PCM frames for TTS audio
+    - JSON text frames for `session_ready`, transcript, agent text, completion, and errors
+        - binary PCM frames for TTS audio
 
 The `protocol.rs` file only defines the JSON message types, but the handler also sends TTS audio as binary frames.
 
@@ -635,11 +646,14 @@ This means the rest of the pipeline never needs to care whether the browser was 
 
 ### 12.4 Backpressure Policy
 
-Inbound WebSocket audio uses `try_send` into the session audio channel.
+Inbound WebSocket audio now uses awaited `send()` into the session audio channel.
 
-If the channel is full, the frame is dropped and a warning is logged.
+That means the transport applies bounded backpressure instead of dropping frames at the transport edge when the session falls behind. This change was made to preserve startup-turn integrity under concurrent load.
 
-This is a deliberate low-latency policy. For live voice input, dropping old audio under overload is usually preferable to growing latency without bound.
+The tradeoff is deliberate:
+
+- the outer WebSocket bridge now prefers short-term backpressure over silent audio loss
+- several inner core-session queues remain bounded and still define the real overload limits
 
 ### 12.5 WebSocket Session Config Behavior
 
@@ -649,10 +663,10 @@ The WebSocket transport currently constructs `SessionConfig` like this:
 - ASR provider from client message
 - TTS provider from client message
 - LLM provider forced to `OpenAi`
-- VAD config forced to `VadConfig::default()`
+- VAD config inherited from app config when available, otherwise `VadConfig::default()`
 - `system_prompt = None`
 
-So although the app config has session defaults and VAD config, the current WebSocket path does not inherit them for per-connection sessions. That is an important current behavior, not just an implementation accident.
+So the current WebSocket path still forces `LlmProviderType::OpenAi` and leaves `system_prompt` unset, but it no longer ignores app-level VAD settings.
 
 ## 13. Asterisk ARI Transport
 
@@ -744,16 +758,16 @@ These wrappers:
 
 The wrappers intentionally operate above the provider implementation. That keeps retry policy outside the HTTP protocol details.
 
-### 14.2 Provider Failure Handling Is Still Dev-Oriented
+### 14.2 Provider Failure Handling Is Still Limited
 
-A critical implementation detail: unrecoverable provider failures are currently sent to a `ProviderFailureHandler`, and the default handler is `PanicOnProviderError`.
+A critical implementation detail: unrecoverable provider failures are currently sent to a `ProviderFailureHandler`, and the default handler used by `PipelineSession::start` is `LogOnProviderError`.
 
-In other words, the codebase already has a `PipelineEvent::ComponentError` type, and the orchestrator knows how to forward it, but the main provider failure path does not automatically convert provider exceptions into `ComponentError` events. In the default runtime path, those failures still tend to panic.
+In other words, the codebase already has a `PipelineEvent::ComponentError` type, and the orchestrator knows how to forward it, but the main provider failure path still does not automatically translate every provider exception into a transport-visible `ComponentError` event.
 
 That is important for contributors to understand:
 
 - the architecture wants structured runtime errors
-- the current implementation still uses fail-fast panic behavior for provider failures in several paths
+- the current implementation logs provider failures by default, but does not yet centralize all failures through the event model
 
 ### 14.3 Lifecycle Events Are Not Yet Central To Shutdown
 
@@ -850,8 +864,8 @@ If you are modifying the system, these are the non-obvious truths that matter mo
 4. Barge-in is implemented through cooperative cancellation tokens and provider `cancel()` calls.
 5. `AgentCore` is session-scoped because memory must survive across turns.
 6. The WebSocket transport returns binary TTS audio frames in addition to JSON control messages.
-7. WebSocket sessions currently ignore app-level VAD defaults and force `LlmProviderType::OpenAi`.
-8. `ChannelConfig` exists but the runtime still hardcodes most capacities.
+7. WebSocket sessions now inherit app-level VAD defaults, but still force `LlmProviderType::OpenAi` and keep `system_prompt = None` on that path.
+8. `ChannelConfig` is wired into the WebSocket transport, but most inner core-session capacities are still hardcoded.
 9. `ComponentError`, `SessionStart`, and `SessionEnd` are part of the shared model, but not yet the dominant runtime control path.
 10. Whisper, Anthropic, and Coqui selections currently resolve to stub providers, so the provider abstraction is ahead of the fully implemented provider matrix.
 
