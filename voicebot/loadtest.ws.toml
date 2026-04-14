@@ -1,0 +1,56 @@
+# WebSocket Core Load Test
+#
+# Bypasses the phone layer entirely: each "call" is a direct WebSocket
+# connection to voicebot-core.  Run with:
+#
+#   cargo run -p voicebot-loadtest -- loadtest.ws.toml
+#
+# The voicebot server must be running and reachable at backend.websocket.url.
+
+# ── Backend ───────────────────────────────────────────────────────────────────
+
+[backend]
+kind = "websocket"
+
+[backend.websocket]
+# WebSocket endpoint of voicebot-core (transport/websocket handler).
+url = "ws://localhost:3000/session"
+# Session parameters forwarded in session_start.
+language = "th"
+asr = "speaches"
+tts = "speaches"
+# How many speech turns per session (send WAV -> wait for response -> repeat).
+turns_per_session = 3
+turn_timeout_ms = 15000
+
+# ── Campaign ──────────────────────────────────────────────────────────────────
+
+[campaign]
+name = "ws-core-loadtest"
+mode = "outbound"
+concurrency = 3           # simultaneous WebSocket sessions
+total_calls = 9           # total sessions to run (0 = soak mode)
+
+# Allow the pipeline to finish speaking before we close the session.
+# Set this to the maximum expected TTS response time (ms).
+settle_before_playback_ms = 0
+record_after_playback_ms = 30000
+
+# Optional: ramp-up and rate limiting.
+# ramp_up_ms           = 3000
+# call_rate_per_second = 1.0
+
+# ── Media ─────────────────────────────────────────────────────────────────────
+
+[media]
+# 16 kHz mono 16-bit PCM WAV containing the caller's speech prompt.
+input_wav = "tests/fixtures/hello_th_16k.wav"
+artifact_dir = "artifacts/loadtest"
+
+# ── Analysis ──────────────────────────────────────────────────────────────────
+
+[analysis]
+silence_threshold = 0.02 # RMS below this → silent
+window_ms = 20
+gap_threshold_ms = 250   # gaps >= this counted in report
+stutter_gap_ms = 200     # gaps < this between voiced regions → stutter

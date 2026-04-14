@@ -39,6 +39,7 @@ RUN cargo build --release -p mock-provider 2>&1 | tail -5 || true
 
 # Copy real source and rebuild
 COPY crates/mock-provider/src/ crates/mock-provider/src/
+COPY tests/fixtures/audio/ tests/fixtures/audio/
 RUN touch crates/mock-provider/src/main.rs && \
     cargo build --release -p mock-provider
 

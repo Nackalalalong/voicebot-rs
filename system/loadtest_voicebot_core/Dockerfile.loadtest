@@ -1,0 +1,49 @@
+FROM rust:slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/common/Cargo.toml       crates/common/Cargo.toml
+COPY crates/vad/Cargo.toml          crates/vad/Cargo.toml
+COPY crates/asr/Cargo.toml          crates/asr/Cargo.toml
+COPY crates/agent/Cargo.toml        crates/agent/Cargo.toml
+COPY crates/tts/Cargo.toml          crates/tts/Cargo.toml
+COPY crates/core/Cargo.toml         crates/core/Cargo.toml
+COPY crates/loadtest/Cargo.toml     crates/loadtest/Cargo.toml
+COPY crates/mock-provider/Cargo.toml crates/mock-provider/Cargo.toml
+COPY crates/transport/websocket/Cargo.toml  crates/transport/websocket/Cargo.toml
+COPY crates/transport/asterisk/Cargo.toml   crates/transport/asterisk/Cargo.toml
+COPY crates/server/Cargo.toml       crates/server/Cargo.toml
+
+RUN for crate in common vad asr agent tts core loadtest; do \
+      mkdir -p crates/$crate/src && echo "// stub" > crates/$crate/src/lib.rs; \
+    done && \
+    echo "fn main() {}" > crates/loadtest/src/main.rs && \
+    mkdir -p crates/mock-provider/src && echo "fn main() {}" > crates/mock-provider/src/main.rs && \
+    mkdir -p crates/transport/websocket/src && echo "// stub" > crates/transport/websocket/src/lib.rs && \
+    mkdir -p crates/transport/asterisk/src && echo "// stub" > crates/transport/asterisk/src/lib.rs && \
+    mkdir -p crates/server/src && echo "fn main() {}" > crates/server/src/main.rs
+
+RUN cargo build --release -p voicebot-loadtest 2>&1 | tail -5 || true
+
+COPY crates/ crates/
+COPY tests/fixtures/audio/ tests/fixtures/audio/
+RUN touch crates/*/src/*.rs crates/transport/*/src/*.rs 2>/dev/null || true && \
+    cargo build --release -p voicebot-loadtest
+
+FROM rust:slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+COPY --from=builder /build/target/release/voicebot-loadtest /usr/local/bin/voicebot-loadtest
+COPY --from=builder /build/tests/fixtures/audio/ /workspace/tests/fixtures/audio/
+
+ENTRYPOINT ["voicebot-loadtest"]

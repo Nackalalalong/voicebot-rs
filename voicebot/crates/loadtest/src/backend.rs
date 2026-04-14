@@ -1,4 +1,5 @@
 mod asterisk;
+mod ws_backend;
 mod xphone_backend;
 
 use async_trait::async_trait;
@@ -7,6 +8,7 @@ use crate::config::LoadtestConfig;
 use crate::error::LoadtestError;
 
 pub use asterisk::AsteriskExternalMediaBackend;
+pub use ws_backend::WsBackend;
 pub use xphone_backend::XphoneBackend;
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,14 @@ pub async fn build_backend(
             })?;
             let backend = XphoneBackend::connect(cfg).await?;
             Ok(Box::new(backend))
+        }
+        "websocket" => {
+            let cfg = config.backend.websocket.clone().ok_or_else(|| {
+                LoadtestError::InvalidConfig(
+                    "backend.kind is 'websocket' but [backend.websocket] is missing".into(),
+                )
+            })?;
+            Ok(Box::new(WsBackend::new(cfg)))
         }
         other => Err(LoadtestError::InvalidConfig(format!(
             "unsupported backend: {}",

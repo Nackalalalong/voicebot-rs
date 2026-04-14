@@ -1,0 +1,85 @@
+# Voicebot Core WebSocket Load Test
+#
+# Runs voicebot-server + mock AI provider in Docker.
+# The loadtest runner also runs in Docker and talks to voicebot over the
+# internal compose network — no Asterisk, no SIP, no RTP.
+#
+# Stack:
+#   [loadtest runner (Docker)] → ws://voicebot:8080/session
+#                                      ↓
+#                           [voicebot-server (Docker):8080]
+#                                      ↓ HTTP
+#                           [mock-provider (Docker):8000]
+#                              ASR · LLM · TTS stubs
+#
+# Usage (from project root):
+#   docker compose -f system/loadtest_voicebot_core/docker-compose.yaml up -d --build voicebot mock-provider
+#   docker compose -f system/loadtest_voicebot_core/docker-compose.yaml --profile loadtest run --rm loadtest
+
+services:
+    # ── Mock ASR / LLM / TTS provider ─────────────────────────────────────────
+    mock-provider:
+        build:
+            context: ../../voicebot
+            dockerfile: ../system/loadtest_mock_provider/mock-provider/Dockerfile
+        container_name: ws-loadtest-mock-provider
+        restart: unless-stopped
+        healthcheck:
+            test: ['CMD', 'curl', '--fail', 'http://localhost:8000/health']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 5s
+        networks:
+            - ws-loadtest-net
+
+    # ── Voicebot server (WebSocket transport) ─────────────────────────────────
+    voicebot:
+        build:
+            context: ../../voicebot
+            dockerfile: Dockerfile
+        container_name: ws-loadtest-voicebot
+        restart: unless-stopped
+        ports:
+            - '${VOICEBOT_PORT:-18080}:8080'
+            - '${VOICEBOT_METRICS_PORT:-18081}:8081'
+        healthcheck:
+            test: ['CMD-SHELL', 'nc -z 127.0.0.1 8080']
+            interval: 2s
+            timeout: 1s
+            retries: 30
+            start_period: 3s
+        volumes:
+            - ./config.voicebot.toml:/etc/voicebot/config.toml:ro
+        environment:
+            - RUST_LOG=${RUST_LOG:-info,voicebot_core=debug,asr=debug,tts=debug,agent=debug}
+        depends_on:
+            mock-provider:
+                condition: service_healthy
+        networks:
+            - ws-loadtest-net
+
+    loadtest:
+        build:
+            context: ../../voicebot
+            dockerfile: ../system/loadtest_voicebot_core/Dockerfile.loadtest
+        profiles: ['loadtest']
+        restart: 'no'
+        working_dir: /workspace
+        command: ['/etc/voicebot-loadtest/loadtest.toml']
+        volumes:
+            - ./loadtest.toml:/etc/voicebot-loadtest/loadtest.toml:ro
+            - ../../voicebot/artifacts:/workspace/artifacts
+        environment:
+            - RUST_LOG=${LOADTEST_RUST_LOG:-info}
+        depends_on:
+            mock-provider:
+                condition: service_healthy
+            voicebot:
+                condition: service_healthy
+        networks:
+            - ws-loadtest-net
+
+networks:
+    ws-loadtest-net:
+        driver: bridge

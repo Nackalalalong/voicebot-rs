@@ -20,6 +20,31 @@ pub struct BackendConfig {
     pub kind: String,
     pub asterisk: Option<AsteriskBackendConfig>,
     pub xphone: Option<XphoneBackendConfig>,
+    pub websocket: Option<WebSocketBackendConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketBackendConfig {
+    /// WebSocket URL, e.g. `ws://localhost:3000/session`.
+    pub url: String,
+    /// BCP-47 language tag forwarded in `session_start`. Default: `"th"`.
+    #[serde(default = "default_ws_language")]
+    pub language: String,
+    /// ASR provider name forwarded in `session_start`. Default: `"speaches"`.
+    #[serde(default = "default_ws_provider")]
+    pub asr: String,
+    /// TTS provider name forwarded in `session_start`. Default: `"speaches"`.
+    #[serde(default = "default_ws_provider")]
+    pub tts: String,
+    /// How many speech turns to send per session.  Each turn streams the input
+    /// WAV, waits for a `tts_complete` event (or `turn_timeout_ms`), then
+    /// sends the WAV again.  Default: 1.
+    #[serde(default = "default_ws_turns_per_session")]
+    pub turns_per_session: usize,
+    /// Per-turn timeout (ms) waiting for `tts_complete` after TX ends.
+    /// Default: 15 000 ms.
+    #[serde(default = "default_ws_turn_timeout_ms")]
+    pub turn_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +166,7 @@ impl LoadtestConfig {
         match self.backend.kind.as_str() {
             "asterisk-external-media" => self.validate_asterisk_backend()?,
             "xphone" => self.validate_xphone_backend()?,
+            "websocket" => self.validate_websocket_backend()?,
             other => {
                 return Err(LoadtestError::InvalidConfig(format!(
                     "unsupported backend.kind: {}",
@@ -162,7 +188,12 @@ impl LoadtestConfig {
                 "inbound mode is only supported with the 'xphone' backend".into(),
             ));
         }
-        if self.campaign.mode == "outbound" && self.campaign.target_endpoint.trim().is_empty() {
+        // websocket backend embeds the target URL in [backend.websocket], so
+        // target_endpoint can safely be left empty for that backend kind.
+        if self.campaign.mode == "outbound"
+            && self.backend.kind != "websocket"
+            && self.campaign.target_endpoint.trim().is_empty()
+        {
             return Err(LoadtestError::InvalidConfig(
                 "campaign.target_endpoint must be non-empty for outbound mode".into(),
             ));
@@ -220,6 +251,30 @@ impl LoadtestConfig {
         if asterisk.accept_timeout_ms == 0 {
             return Err(LoadtestError::InvalidConfig(
                 "backend.asterisk.accept_timeout_ms must be > 0".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_websocket_backend(&self) -> Result<(), LoadtestError> {
+        let ws = self.backend.websocket.as_ref().ok_or_else(|| {
+            LoadtestError::InvalidConfig(
+                "backend.kind is 'websocket' but [backend.websocket] is missing".into(),
+            )
+        })?;
+        if ws.url.trim().is_empty() {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.websocket.url must be non-empty".into(),
+            ));
+        }
+        if !ws.url.starts_with("ws://") && !ws.url.starts_with("wss://") {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.websocket.url must start with ws:// or wss://".into(),
+            ));
+        }
+        if ws.language.trim().is_empty() || ws.asr.trim().is_empty() || ws.tts.trim().is_empty() {
+            return Err(LoadtestError::InvalidConfig(
+                "backend.websocket: language, asr, and tts must be non-empty".into(),
             ));
         }
         Ok(())
@@ -283,6 +338,22 @@ fn substitute_env_vars(input: &str) -> Result<String, LoadtestError> {
 
 fn default_backend_kind() -> String {
     "asterisk-external-media".into()
+}
+
+fn default_ws_language() -> String {
+    "th".into()
+}
+
+fn default_ws_provider() -> String {
+    "speaches".into()
+}
+
+fn default_ws_turns_per_session() -> usize {
+    1
+}
+
+fn default_ws_turn_timeout_ms() -> u64 {
+    15_000
 }
 
 fn default_ari_port() -> u16 {

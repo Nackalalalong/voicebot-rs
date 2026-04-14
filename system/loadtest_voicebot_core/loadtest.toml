@@ -1,0 +1,41 @@
+[backend]
+kind = "websocket"
+
+[backend.websocket]
+# WebSocket endpoint of the voicebot server on the internal compose network.
+url = "ws://voicebot:8080/session"
+language = "en"
+asr = "speaches"
+tts = "speaches"
+# How many speech turns per session (send WAV -> wait for response -> repeat).
+turns_per_session = 3
+turn_timeout_ms = 15000
+
+[campaign]
+name = "ws-core-loadtest"
+mode = "outbound"
+concurrency = 3
+
+# Total sessions to run.  Set total_calls = 0 and soak_duration_secs > 0 for
+# indefinite soak testing.
+total_calls = 9
+
+# Let the mock TTS finish before closing the session.
+settle_before_playback_ms = 0
+record_after_playback_ms = 8000
+
+# Optional ramp-up / rate limiting
+# ramp_up_ms           = 1000
+# call_rate_per_second = 1.0
+
+[media]
+# 16 kHz mono 16-bit PCM WAV.  Path is relative to the directory where you
+# invoke `cargo run -p voicebot-loadtest`.
+input_wav = "tests/fixtures/audio/sample_speech.wav"
+artifact_dir = "artifacts/loadtest"
+
+[analysis]
+silence_threshold = 0.02
+window_ms = 20
+gap_threshold_ms = 250
+stutter_gap_ms = 200
