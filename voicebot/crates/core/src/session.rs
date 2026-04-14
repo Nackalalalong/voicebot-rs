@@ -308,12 +308,13 @@ pub fn build_providers(
         .map(AsrProviderType::from_str_loose)
         .filter(|provider| *provider != effective_asr_primary);
     let asr_primary = build_asr_provider_for_type(app_config, effective_asr_primary.clone())?;
-    let asr: Arc<dyn AsrProvider> = if let Some(fallback_type) = asr_fallback_type {
-        let fallback = build_asr_provider_for_type(app_config, fallback_type)?;
-        Arc::new(FallbackAsrProvider::new(asr_primary, Some(fallback)))
-    } else {
-        asr_primary
+    let asr_fallback = match asr_fallback_type {
+        Some(fallback_type) => Some(build_asr_provider_for_type(app_config, fallback_type)?),
+        None => None,
     };
+    // Always wrap ASR so transient recoverable errors get bounded retries,
+    // even when no distinct fallback provider is configured.
+    let asr: Arc<dyn AsrProvider> = Arc::new(FallbackAsrProvider::new(asr_primary, asr_fallback));
 
     let configured_llm_primary = LlmProviderType::from_str_loose(&app_config.llm.primary);
     let effective_llm_primary = if session_config.llm_provider == configured_llm_primary {
@@ -669,6 +670,37 @@ mod tests {
         async fn cancel(&self) {}
     }
 
+    struct RecoveringAsrProvider {
+        attempts: Arc<AtomicUsize>,
+        succeed_on_attempt: usize,
+    }
+
+    #[async_trait]
+    impl AsrProvider for RecoveringAsrProvider {
+        async fn stream(
+            &self,
+            mut audio: Box<dyn AudioInputStream>,
+            tx: Sender<PipelineEvent>,
+        ) -> Result<(), AsrError> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            while audio.recv().await.is_some() {}
+
+            if attempt < self.succeed_on_attempt {
+                return Err(AsrError::ConnectionFailed);
+            }
+
+            tx.send(PipelineEvent::FinalTranscript {
+                text: "recovered transcript".into(),
+                language: "en".into(),
+            })
+            .await
+            .map_err(|_| AsrError::ChannelClosed)?;
+            Ok(())
+        }
+
+        async fn cancel(&self) {}
+    }
+
     struct FailingLlmProvider {
         attempts: Arc<AtomicUsize>,
     }
@@ -737,6 +769,30 @@ mod tests {
         assert!(matches!(
             rx.recv().await,
             Some(PipelineEvent::FinalTranscript { text, .. }) if text == "fallback transcript"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_asr_primary_retries_even_without_fallback() {
+        let primary_attempts = Arc::new(AtomicUsize::new(0));
+        let provider = FallbackAsrProvider::new(
+            Arc::new(RecoveringAsrProvider {
+                attempts: Arc::clone(&primary_attempts),
+                succeed_on_attempt: 3,
+            }),
+            None,
+        );
+        let (tx, mut rx) = mpsc::channel(8);
+
+        provider
+            .stream(Box::new(TestAudioStream::silence(40)), tx)
+            .await
+            .expect("ASR primary should succeed after retries");
+
+        assert_eq!(primary_attempts.load(Ordering::SeqCst), 3);
+        assert!(matches!(
+            rx.recv().await,
+            Some(PipelineEvent::FinalTranscript { text, .. }) if text == "recovered transcript"
         ));
     }
 

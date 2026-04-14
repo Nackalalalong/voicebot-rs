@@ -105,11 +105,6 @@ impl VadComponent {
                     is_speaking = false;
                     voiced_ms = 0;
                     debug!(timestamp_ms = frame.timestamp_ms, "SpeechEnded");
-                    if let Some(ref tx) = self.speech_state_tx {
-                        if let Err(error) = tx.send(false).await {
-                            warn!(%error, "Failed to send speech state end");
-                        }
-                    }
                     if let Err(e) = self
                         .event_tx
                         .send(PipelineEvent::SpeechEnded {
@@ -119,6 +114,14 @@ impl VadComponent {
                     {
                         warn!("Failed to send SpeechEnded: {}", e);
                         break;
+                    }
+                    // Preserve the state-machine edge into Transcribing before
+                    // closing the ASR capture side channel. This prevents a
+                    // fast ASR final transcript from overtaking SpeechEnded.
+                    if let Some(ref tx) = self.speech_state_tx {
+                        if let Err(error) = tx.send(false).await {
+                            warn!(%error, "Failed to send speech state end");
+                        }
                     }
                 }
 
@@ -261,6 +264,62 @@ mod tests {
         let speaking = timeout(Duration::from_secs(2), speech_state_rx.recv())
             .await
             .expect("timeout waiting for speech end")
+            .expect("speech state channel closed");
+        assert!(!speaking, "expected speech end side-channel event");
+    }
+
+    #[tokio::test]
+    async fn test_vad_emits_speech_ended_before_side_channel_end() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(10);
+        let (speech_state_tx, mut speech_state_rx) = tokio::sync::mpsc::channel(10);
+        let cancel_token = CancellationToken::new();
+        let audio = TestAudioStream::speech_then_silence(440.0, 500, 1000, 0.5).realtime();
+
+        let mut vad = VadComponent::new(default_config(), event_tx, cancel_token)
+            .with_speech_state(speech_state_tx);
+        tokio::spawn(async move {
+            vad.run(Box::new(audio)).await;
+        });
+
+        let mut saw_started_event = false;
+        let mut saw_started_side_channel = false;
+        while !saw_started_event || !saw_started_side_channel {
+            tokio::select! {
+                event = event_rx.recv() => {
+                    match event {
+                        Some(PipelineEvent::SpeechStarted { .. }) => saw_started_event = true,
+                        other => panic!("expected SpeechStarted event, got {:?}", other),
+                    }
+                }
+                speaking = speech_state_rx.recv() => {
+                    match speaking {
+                        Some(true) => saw_started_side_channel = true,
+                        other => panic!("expected speech start side-channel event, got {:?}", other),
+                    }
+                }
+            }
+        }
+
+        let first_end_signal = timeout(Duration::from_secs(3), async {
+            tokio::select! {
+                event = event_rx.recv() => (Some(event), None),
+                speaking = speech_state_rx.recv() => (None, Some(speaking)),
+            }
+        })
+        .await
+        .expect("timeout waiting for speech end signal");
+
+        match first_end_signal {
+            (Some(Some(PipelineEvent::SpeechEnded { .. })), None) => {}
+            (None, Some(Some(false))) => {
+                panic!("speech-state end arrived before SpeechEnded event")
+            }
+            other => panic!("unexpected first end signal: {:?}", other),
+        }
+
+        let speaking = timeout(Duration::from_secs(2), speech_state_rx.recv())
+            .await
+            .expect("timeout waiting for speech end side-channel event")
             .expect("speech state channel closed");
         assert!(!speaking, "expected speech end side-channel event");
     }

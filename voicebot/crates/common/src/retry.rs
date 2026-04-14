@@ -7,7 +7,11 @@ use std::time::Duration;
 /// - `max_attempts`: total attempts (1 = no retry)
 /// - `base_delay_ms`: initial delay between retries
 /// - `f`: closure producing the future to retry
-pub async fn with_retry<F, Fut, T, E>(max_attempts: u32, base_delay_ms: u64, mut f: F) -> Result<T, E>
+pub async fn with_retry<F, Fut, T, E>(
+    max_attempts: u32,
+    base_delay_ms: u64,
+    mut f: F,
+) -> Result<T, E>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, E>>,
