@@ -2,34 +2,34 @@
 kind = "xphone"
 
 [backend.xphone]
-sip_host             = "127.0.0.1"
-local_ip             = "192.168.1.110"
-sip_port             = 5060
-transport            = "udp"
-username             = "voicebot"
-password             = "voicebot"
-rtp_port_min         = 20000
-rtp_port_max         = 20100
-register_timeout_ms  = 10000
-call_timeout_ms      = 30000
+sip_host = "127.0.0.1"
+local_ip = "192.168.1.110"
+sip_port = 5060
+transport = "udp"
+username = "voicebot"
+password = "voicebot"
+rtp_port_min = 20000
+rtp_port_max = 20100
+register_timeout_ms = 10000
+call_timeout_ms = 30000
 
 [campaign]
-name                       = "mock-loadtest"
-target_endpoint            = "1000"
-caller_id                  = "loadtest"
-concurrency                = 5
-total_calls                = 20
-settle_before_playback_ms  = 500
-record_after_playback_ms   = 6000
-ramp_up_ms                 = 1000
-call_rate_per_second       = 0.0
+name = "mock-loadtest"
+target_endpoint = "1000"
+caller_id = "loadtest"
+concurrency = 5
+total_calls = 20
+settle_before_playback_ms = 500
+record_after_playback_ms = 6000
+ramp_up_ms = 1000
+call_rate_per_second = 0.0
 
 [media]
-input_wav    = "tests/fixtures/audio/sample_speech.wav"
-artifact_dir = "artifacts/loadtest"
+input_wav = "tests/fixtures/audio/sample_speech.wav"
+artifact_dir = "../system/loadtest_mock_provider/artifacts/loadtest"
 
 [analysis]
 silence_threshold = 0.02
-window_ms         = 20
-gap_threshold_ms  = 250
-stutter_gap_ms    = 200
+window_ms = 20
+gap_threshold_ms = 250
+stutter_gap_ms = 200
