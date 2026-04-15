@@ -1,5 +1,12 @@
-# include:
-#   - compose.observability.yaml
+# Speaches CPU-only compose — extends base compose.yaml.
+#
+# Monitoring (optional, --profile monitoring):
+#   Adds Prometheus that scrapes the Speaches /metrics endpoint.
+#   Use alongside system/monitoring/ for Grafana dashboards.
+#
+# Usage (from project root):
+#   docker compose -f system/speaches/compose.cpu.yaml up -d
+#   docker compose -f system/speaches/compose.cpu.yaml --profile monitoring up -d
 services:
     speaches:
         extends:
@@ -9,4 +16,32 @@ services:
         user: root
         volumes:
             - ${HOME}/.cache/huggingface/hub:/home/ubuntu/.cache/huggingface/hub
-volumes: {}
+        networks:
+            - speaches-net
+
+    # ── Prometheus (optional — --profile monitoring) ───────────────────────────
+    # Scrapes Speaches /metrics endpoint.
+    # Pair with system/monitoring/ for Grafana: connect via host ports.
+    prometheus:
+        image: prom/prometheus:v3.3.1
+        profiles: ['monitoring']
+        restart: unless-stopped
+        command:
+            - '--config.file=/etc/prometheus/prometheus.yaml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--storage.tsdb.retention.time=7d'
+            - '--web.enable-lifecycle'
+        ports:
+            - '${MONITORING_PROMETHEUS_PORT:-9092}:9090'
+        volumes:
+            - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+            - speaches-prometheus-data:/prometheus
+        networks:
+            - speaches-net
+
+networks:
+    speaches-net:
+        driver: bridge
+
+volumes:
+    speaches-prometheus-data: {}

@@ -1,0 +1,33 @@
+global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    external_labels:
+        monitor: voicebot
+
+scrape_configs:
+    # ── voicebot-core-demo stack ───────────────────────────────────────────────
+    # Start with: docker compose -f system/voicebot-core-demo/docker-compose.yaml up -d
+    # Metrics exposed on host port 8081 (WS server port 8080 + 1)
+    - job_name: voicebot-demo
+      static_configs:
+          - targets: ['host.docker.internal:8081']
+            labels:
+                stack: demo
+
+    # ── WebSocket loadtest stack ───────────────────────────────────────────────
+    # Start with: docker compose -f system/loadtest_voicebot_core/docker-compose.yaml up -d voicebot mock-provider
+    # Metrics exposed on host port 18081 (VOICEBOT_METRICS_PORT)
+    - job_name: voicebot-ws-loadtest
+      static_configs:
+          - targets: ['host.docker.internal:18081']
+            labels:
+                stack: ws-loadtest
+
+    # ── Mock-provider (ARI) loadtest stack ────────────────────────────────────
+    # Start with: docker compose -f system/loadtest_mock_provider/docker-compose.yaml up -d
+    # Voicebot runs in Asterisk netns; metrics exposed via asterisk port 18082
+    - job_name: voicebot-mock-loadtest
+      static_configs:
+          - targets: ['host.docker.internal:18082']
+            labels:
+                stack: mock-loadtest

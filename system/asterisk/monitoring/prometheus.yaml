@@ -1,0 +1,17 @@
+global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    external_labels:
+        stack: asterisk
+
+scrape_configs:
+    # voicebot metrics — running in Asterisk's netns via loadtest_mock_provider,
+    # or started alongside Asterisk as a separate process on the host.
+    - job_name: voicebot
+      static_configs:
+          - targets: ['localhost:8081']
+
+    # If asterisk-exporter is running (https://github.com/nytm/asterisk_exporter):
+    # - job_name: asterisk
+    #   static_configs:
+    #       - targets: ['localhost:9853']

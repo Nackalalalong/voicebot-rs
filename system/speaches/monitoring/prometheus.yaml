@@ -1,0 +1,12 @@
+global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    external_labels:
+        stack: speaches
+
+scrape_configs:
+    # Speaches exposes Prometheus metrics at /metrics (OpenTelemetry-compatible)
+    - job_name: speaches
+      static_configs:
+          - targets: ['speaches:8000']
+      metrics_path: /metrics

@@ -1,0 +1,10 @@
+global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    external_labels:
+        stack: ws-loadtest
+
+scrape_configs:
+    - job_name: voicebot
+      static_configs:
+          - targets: ['voicebot:8081']

@@ -25,5 +25,26 @@ services:
             - ./pulse:/run/pulse # Use host audio
             - /etc/localtime:/etc/localtime:ro # Use host timezone
 
+    # ── Prometheus (optional — --profile monitoring) ───────────────────────────
+    # Runs on the host network so it can scrape:
+    #   localhost:8088  — Asterisk ARI (requires asterisk-exporter or /ari scrape)
+    #   localhost:8081  — voicebot metrics (when voicebot runs alongside Asterisk)
+    # Prometheus UI: http://localhost:${MONITORING_PROMETHEUS_PORT:-9093}
+    prometheus:
+        image: prom/prometheus:v3.3.1
+        profiles: ['monitoring']
+        network_mode: host
+        restart: unless-stopped
+        command:
+            - '--config.file=/etc/prometheus/prometheus.yaml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--web.listen-address=:${MONITORING_PROMETHEUS_PORT:-9093}'
+            - '--storage.tsdb.retention.time=7d'
+            - '--web.enable-lifecycle'
+        volumes:
+            - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+            - asterisk-prometheus-data:/prometheus
+
 volumes:
     tele-conf: # Persistent storage
+    asterisk-prometheus-data:

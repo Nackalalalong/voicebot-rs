@@ -12,6 +12,9 @@ services:
         extends:
             file: ../asterisk/docker-compose.yaml
             service: tele
+        ports:
+            # Expose voicebot metrics port (voicebot runs in Asterisk's netns)
+            - '${VOICEBOT_METRICS_PORT:-18082}:8081'
         volumes:
             - ../asterisk/etc:/srv/etc/asterisk
             - ./asterisk/pjsip_transport.conf:/srv/etc/asterisk/pjsip_transport.conf:ro

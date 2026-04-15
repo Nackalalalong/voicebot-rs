@@ -1,0 +1,426 @@
+{
+    "title": "Voicebot Performance",
+    "uid": "voicebot-perf",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "15s",
+    "time": {"from": "now-30m", "to": "now"},
+    "timezone": "browser",
+    "tags": ["voicebot"],
+    "panels": [
+        {
+            "id": 1,
+            "type": "stat",
+            "title": "Active Sessions",
+            "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {
+                "reduceOptions": {"calcs": ["lastNotNull"]},
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "auto"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {"mode": "thresholds"},
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 100},
+                            {"color": "red", "value": 500}
+                        ]
+                    },
+                    "unit": "short"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "sum(voicebot_sessions_active)",
+                    "legendFormat": "active",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 2,
+            "type": "stat",
+            "title": "Interrupts (24h)",
+            "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {
+                "reduceOptions": {"calcs": ["lastNotNull"]},
+                "colorMode": "value",
+                "graphMode": "area"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {"mode": "thresholds"},
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "orange", "value": 50}
+                        ]
+                    },
+                    "unit": "short"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "increase(voicebot_interrupts_total[24h])",
+                    "legendFormat": "interrupts",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 3,
+            "type": "stat",
+            "title": "Errors (24h)",
+            "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {
+                "reduceOptions": {"calcs": ["lastNotNull"]},
+                "colorMode": "background",
+                "graphMode": "area"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {"mode": "thresholds"},
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "red", "value": 1}
+                        ]
+                    },
+                    "unit": "short"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "increase(voicebot_errors_total[24h])",
+                    "legendFormat": "errors",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 4,
+            "type": "stat",
+            "title": "Session Duration p99 (ms)",
+            "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {
+                "reduceOptions": {"calcs": ["lastNotNull"]},
+                "colorMode": "value",
+                "graphMode": "area"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 30000},
+                            {"color": "red", "value": 60000}
+                        ]
+                    },
+                    "color": {"mode": "thresholds"}
+                }
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.99, sum(rate(voicebot_session_duration_ms_bucket[5m])) by (le))",
+                    "legendFormat": "p99",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 10,
+            "type": "timeseries",
+            "title": "Active Sessions",
+            "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "custom": {"lineWidth": 2, "fillOpacity": 10}
+                },
+                "overrides": [
+                    {
+                        "matcher": {"id": "byName", "options": "active"},
+                        "properties": [
+                            {"id": "color", "value": {"fixedColor": "blue", "mode": "fixed"}}
+                        ]
+                    }
+                ]
+            },
+            "targets": [
+                {
+                    "expr": "sum(voicebot_sessions_active) by (stack)",
+                    "legendFormat": "{{stack}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 11,
+            "type": "timeseries",
+            "title": "Interrupt & Error Rates",
+            "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops",
+                    "custom": {"lineWidth": 2, "fillOpacity": 5}
+                }
+            },
+            "targets": [
+                {
+                    "expr": "rate(voicebot_interrupts_total[1m])",
+                    "legendFormat": "interrupts/s {{stack}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "rate(voicebot_errors_total[1m])",
+                    "legendFormat": "errors/s {{component}} {{stack}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 20,
+            "type": "row",
+            "title": "Pipeline Latency",
+            "gridPos": {"x": 0, "y": 12, "w": 24, "h": 1},
+            "collapsed": false
+        },
+        {
+            "id": 21,
+            "type": "timeseries",
+            "title": "ASR Latency (ms)",
+            "description": "Time from SpeechEnded to FinalTranscript",
+            "gridPos": {"x": 0, "y": 13, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {"lineWidth": 2},
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 500},
+                            {"color": "red", "value": 1000}
+                        ]
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum(rate(voicebot_asr_latency_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p50 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum(rate(voicebot_asr_latency_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p95 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.99, sum(rate(voicebot_asr_latency_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p99 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 22,
+            "type": "timeseries",
+            "title": "LLM First Token Latency (ms)",
+            "description": "Time from FinalTranscript to first AgentPartialResponse token",
+            "gridPos": {"x": 12, "y": 13, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {"lineWidth": 2},
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 300},
+                            {"color": "red", "value": 500}
+                        ]
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum(rate(voicebot_llm_first_token_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p50 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum(rate(voicebot_llm_first_token_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p95 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.99, sum(rate(voicebot_llm_first_token_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p99 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 23,
+            "type": "timeseries",
+            "title": "LLM Total Response Latency (ms)",
+            "description": "Time from FinalTranscript to AgentFinalResponse",
+            "gridPos": {"x": 0, "y": 21, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {"lineWidth": 2},
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 1000},
+                            {"color": "red", "value": 3000}
+                        ]
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum(rate(voicebot_llm_total_ms_bucket[1m])) by (le))",
+                    "legendFormat": "p50",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum(rate(voicebot_llm_total_ms_bucket[1m])) by (le))",
+                    "legendFormat": "p95",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.99, sum(rate(voicebot_llm_total_ms_bucket[1m])) by (le))",
+                    "legendFormat": "p99",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 24,
+            "type": "timeseries",
+            "title": "TTS First Chunk Latency (ms)",
+            "description": "Time from sentence boundary to first TtsAudioChunk",
+            "gridPos": {"x": 12, "y": 21, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {"lineWidth": 2},
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {"color": "green", "value": null},
+                            {"color": "yellow", "value": 400},
+                            {"color": "red", "value": 800}
+                        ]
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum(rate(voicebot_tts_first_chunk_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p50 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum(rate(voicebot_tts_first_chunk_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p95 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.99, sum(rate(voicebot_tts_first_chunk_ms_bucket[1m])) by (le, provider))",
+                    "legendFormat": "p99 {{provider}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 30,
+            "type": "row",
+            "title": "Session Analysis",
+            "gridPos": {"x": 0, "y": 29, "w": 24, "h": 1},
+            "collapsed": false
+        },
+        {
+            "id": 31,
+            "type": "timeseries",
+            "title": "Session Duration (ms)",
+            "description": "Full session lifetime from SessionStart to SessionEnd",
+            "gridPos": {"x": 0, "y": 30, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {"lineWidth": 2}
+                }
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum(rate(voicebot_session_duration_ms_bucket[5m])) by (le))",
+                    "legendFormat": "p50",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum(rate(voicebot_session_duration_ms_bucket[5m])) by (le))",
+                    "legendFormat": "p95",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                },
+                {
+                    "expr": "histogram_quantile(0.99, sum(rate(voicebot_session_duration_ms_bucket[5m])) by (le))",
+                    "legendFormat": "p99",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        },
+        {
+            "id": 32,
+            "type": "timeseries",
+            "title": "Session Completion Rate",
+            "description": "Sessions completed per minute",
+            "gridPos": {"x": 12, "y": 30, "w": 12, "h": 8},
+            "datasource": {"uid": "voicebot-prometheus"},
+            "options": {"tooltip": {"mode": "multi"}},
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops",
+                    "custom": {"lineWidth": 2, "fillOpacity": 10}
+                }
+            },
+            "targets": [
+                {
+                    "expr": "rate(voicebot_session_duration_ms_count[1m]) * 60",
+                    "legendFormat": "sessions/min {{stack}}",
+                    "datasource": {"uid": "voicebot-prometheus"}
+                }
+            ]
+        }
+    ]
+}

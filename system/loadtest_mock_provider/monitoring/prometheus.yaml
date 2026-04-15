@@ -1,0 +1,12 @@
+global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    external_labels:
+        stack: mock-loadtest
+
+scrape_configs:
+    # voicebot runs in Asterisk's netns; metrics are accessible at localhost:8081
+    # inside the Asterisk container, and forwarded to host port 18082.
+    - job_name: voicebot
+      static_configs:
+          - targets: ['localhost:18082']
