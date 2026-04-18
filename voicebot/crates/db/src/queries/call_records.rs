@@ -172,3 +172,59 @@ pub async fn set_analysis(
     .await?;
     Ok(())
 }
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct CampaignAnalytics {
+    pub total_calls: i64,
+    pub completed_calls: i64,
+    pub avg_duration_secs: Option<f64>,
+    pub answer_rate: Option<f64>,
+}
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct SentimentRow {
+    pub sentiment: String,
+    pub count: i64,
+}
+
+pub async fn analytics_for_campaign(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    campaign_id: Uuid,
+) -> Result<CampaignAnalytics> {
+    let row = sqlx::query_as::<_, CampaignAnalytics>(
+        r#"SELECT
+            COUNT(*)::bigint                                      AS total_calls,
+            COUNT(*) FILTER (WHERE status = 'completed')::bigint AS completed_calls,
+            AVG(duration_secs) FILTER (WHERE duration_secs IS NOT NULL) AS avg_duration_secs,
+            CASE WHEN COUNT(*) > 0
+                 THEN COUNT(*) FILTER (WHERE status = 'completed')::float / COUNT(*)::float
+                 ELSE NULL
+            END AS answer_rate
+           FROM call_records
+           WHERE tenant_id = $1 AND campaign_id = $2"#,
+    )
+    .bind(tenant_id)
+    .bind(campaign_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn sentiment_breakdown(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    campaign_id: Uuid,
+) -> Result<Vec<SentimentRow>> {
+    let rows = sqlx::query_as::<_, SentimentRow>(
+        r#"SELECT COALESCE(sentiment, 'unknown') AS sentiment, COUNT(*)::bigint AS count
+           FROM call_records
+           WHERE tenant_id = $1 AND campaign_id = $2
+           GROUP BY sentiment"#,
+    )
+    .bind(tenant_id)
+    .bind(campaign_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}

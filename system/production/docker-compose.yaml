@@ -87,6 +87,11 @@ services:
                 condition: service_healthy
             minio:
                 condition: service_healthy
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/healthz"]
+            interval: 15s
+            timeout: 5s
+            retries: 5
         restart: unless-stopped
 
     # ─── Voicebot Core (real-time voice engine) ─────────────────────────────────
@@ -118,12 +123,24 @@ services:
         environment:
             DATABASE_URL: postgresql://voicebot:voicebot_dev@postgres:5432/voicebot
             REDIS_URL: redis://redis:6379
+            ARI_BASE_URL: ${ARI_BASE_URL:-http://asterisk:8088}
+            ARI_USERNAME: ${ARI_USERNAME:-voicebot}
+            ARI_PASSWORD: ${ARI_PASSWORD:-voicebot}
+            ARI_STASIS_APP: voicebot
+            LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
+            LLM_API_KEY: ${LLM_API_KEY:-}
+            LLM_ANALYSIS_MODEL: ${LLM_ANALYSIS_MODEL:-gpt-4o-mini}
             RUST_LOG: 'info,scheduler=debug'
         depends_on:
             postgres:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+            interval: 15s
+            timeout: 5s
+            retries: 5
         restart: unless-stopped
 
     # ─── Next.js Dashboard ────────────────────────────────────────────────────

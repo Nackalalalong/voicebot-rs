@@ -3285,6 +3285,7 @@ version = "0.1.0"
 dependencies = [
  "apalis",
  "apalis-sql",
+ "axum 0.8.8",
  "cache",
  "chrono",
  "db",

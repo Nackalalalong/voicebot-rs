@@ -2,6 +2,7 @@ use std::env;
 
 use apalis::prelude::{Monitor, WorkerBuilder, WorkerBuilderExt, WorkerFactoryFn};
 use apalis_sql::postgres::{PgPool, PostgresStorage};
+use axum::{routing::get, Router};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -14,6 +15,10 @@ use context::SchedulerContext;
 use dialer::handle_outbound_call;
 use jobs::{OutboundCallJob, PostCallAnalysisJob};
 use post_call::handle_post_call_analysis;
+
+async fn healthz() -> &'static str {
+    "ok"
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,6 +46,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let analysis_storage: PostgresStorage<PostCallAnalysisJob> =
         PostgresStorage::new(pool.clone());
 
+    // Spawn a minimal health-check HTTP server
+    tokio::spawn(async {
+        let app = Router::new().route("/healthz", get(healthz));
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:8081")
+            .await
+            .expect("bind :8081");
+        axum::serve(listener, app).await.ok();
+    });
+
     info!("voicebot-scheduler starting");
 
     Monitor::new()
@@ -64,4 +78,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("voicebot-scheduler shut down");
     Ok(())
 }
-

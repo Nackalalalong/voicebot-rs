@@ -6,6 +6,7 @@ pub mod state;
 use std::sync::Arc;
 
 use axum::{
+    extract::State,
     middleware,
     routing::{delete, get, post, put},
     Router,
@@ -26,7 +27,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/auth/register", post(routes::auth::register))
         .route("/auth/login", post(routes::auth::login))
         .route("/auth/refresh", post(routes::auth::refresh))
-        .route("/healthz", get(healthz));
+        .route("/healthz", get(healthz))
+        .with_state(state.clone());
 
     // Protected routes (require valid access token)
     let protected = Router::new()
@@ -51,6 +53,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/campaigns/:id/prompt", put(routes::campaigns::update_campaign_prompt))
         .route("/campaigns/:id", delete(routes::campaigns::delete_campaign))
         .route("/campaigns/:id/session-token", post(routes::campaigns::issue_session_token))
+        .route("/campaigns/:id/analytics", get(routes::campaigns::get_campaign_analytics))
+        .route("/campaigns/:id/calls", get(routes::campaigns::list_campaign_calls))
+        .route("/campaigns/:id/metrics", put(routes::campaigns::update_campaign_metrics))
         // Contacts
         .route("/campaigns/:campaign_id/contacts", get(routes::contacts::list_contacts))
         .route("/campaigns/:campaign_id/contacts", post(routes::contacts::create_contact))
@@ -81,6 +86,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn healthz() -> &'static str {
-    "ok"
+async fn healthz(State(state): State<Arc<AppState>>) -> Result<&'static str, axum::http::StatusCode> {
+    // Ping DB
+    db::health_check(&state.db)
+        .await
+        .map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
+    // Ping Redis
+    cache::health_check(&mut state.redis.clone())
+        .await
+        .map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok("ok")
 }

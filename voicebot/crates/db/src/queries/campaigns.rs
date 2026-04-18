@@ -125,6 +125,25 @@ pub async fn update_prompt(
     .ok_or(DbError::NotFound)
 }
 
+pub async fn update_metrics(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    id: Uuid,
+    custom_metrics_config: serde_json::Value,
+) -> Result<Campaign> {
+    sqlx::query_as::<_, Campaign>(
+        "UPDATE campaigns SET custom_metrics = $1, updated_at = NOW()
+         WHERE id = $2 AND tenant_id = $3
+         RETURNING *",
+    )
+    .bind(custom_metrics_config)
+    .bind(id)
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::NotFound)
+}
+
 pub async fn delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<()> {
     let rows = sqlx::query("DELETE FROM campaigns WHERE id = $1 AND tenant_id = $2")
         .bind(id)

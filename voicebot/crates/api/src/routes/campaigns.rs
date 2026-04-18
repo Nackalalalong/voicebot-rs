@@ -158,3 +158,61 @@ pub async fn issue_session_token(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(serde_json::json!({ "token": token, "expires_in_secs": 300 })))
 }
+
+/// GET /campaigns/:id/analytics
+pub async fn get_campaign_analytics(
+    Extension(user): Extension<AuthUser>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    db::queries::campaigns::get_by_id(&state.db, user.tenant_id, id).await?;
+    let (stats, sentiment) = tokio::try_join!(
+        db::queries::call_records::analytics_for_campaign(&state.db, user.tenant_id, id),
+        db::queries::call_records::sentiment_breakdown(&state.db, user.tenant_id, id),
+    )?;
+    Ok(Json(serde_json::json!({
+        "total_calls": stats.total_calls,
+        "completed_calls": stats.completed_calls,
+        "avg_duration_secs": stats.avg_duration_secs,
+        "answer_rate": stats.answer_rate,
+        "sentiment_breakdown": sentiment,
+    })))
+}
+
+/// GET /campaigns/:id/calls
+pub async fn list_campaign_calls(
+    Extension(user): Extension<AuthUser>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<PaginationParams>,
+) -> ApiResult<Json<Page<db::models::CallRecord>>> {
+    db::queries::campaigns::get_by_id(&state.db, user.tenant_id, id).await?;
+    let limit = params.limit_clamped();
+    let offset = params.offset();
+    let (items, total) = tokio::try_join!(
+        db::queries::call_records::list(&state.db, user.tenant_id, Some(id), limit, offset),
+        db::queries::call_records::count(&state.db, user.tenant_id, Some(id)),
+    )?;
+    Ok(Json(Page::new(items, total, &params)))
+}
+
+/// PUT /campaigns/:id/metrics
+#[derive(serde::Deserialize)]
+pub struct UpdateMetricsRequest {
+    pub custom_metrics_config: serde_json::Value,
+}
+
+pub async fn update_campaign_metrics(
+    Extension(user): Extension<AuthUser>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateMetricsRequest>,
+) -> ApiResult<Json<db::models::Campaign>> {
+    if !user.is_admin() {
+        return Err(ApiError::Forbidden);
+    }
+    let campaign =
+        db::queries::campaigns::update_metrics(&state.db, user.tenant_id, id, req.custom_metrics_config)
+            .await?;
+    Ok(Json(campaign))
+}

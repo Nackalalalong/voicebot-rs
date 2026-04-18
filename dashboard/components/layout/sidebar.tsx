@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import {usePathname, useRouter} from 'next/navigation';
-import {LayoutDashboard, Megaphone, Phone, Settings, LogOut} from 'lucide-react';
+import {LayoutDashboard, Megaphone, Phone, Settings, LogOut, Radio} from 'lucide-react';
 
 const NAV_ITEMS = [
     {href: '/overview', label: 'Overview', icon: LayoutDashboard},
     {href: '/campaigns', label: 'Campaigns', icon: Megaphone},
     {href: '/calls', label: 'Calls', icon: Phone},
+    {href: '/live', label: 'Live Monitor', icon: Radio},
     {href: '/settings', label: 'Settings', icon: Settings},
 ];
 
