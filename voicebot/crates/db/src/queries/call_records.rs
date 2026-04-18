@@ -230,11 +230,12 @@ pub async fn sentiment_breakdown(
 
 /// Count calls with no ended_at (currently active).
 pub async fn count_active(pool: &PgPool, tenant_id: Uuid) -> Result<i64> {
-    let row: (i64,) =
-        sqlx::query_as("SELECT COUNT(*)::bigint FROM call_records WHERE tenant_id = $1 AND ended_at IS NULL")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)::bigint FROM call_records WHERE tenant_id = $1 AND ended_at IS NULL",
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
     Ok(row.0)
 }
 

@@ -38,14 +38,12 @@ pub async fn create(
 }
 
 pub async fn get_by_id(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<PhoneNumber> {
-    sqlx::query_as::<_, PhoneNumber>(
-        "SELECT * FROM phone_numbers WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(DbError::NotFound)
+    sqlx::query_as::<_, PhoneNumber>("SELECT * FROM phone_numbers WHERE id = $1 AND tenant_id = $2")
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
 }
 
 pub async fn list(
@@ -66,11 +64,10 @@ pub async fn list(
 }
 
 pub async fn count(pool: &PgPool, tenant_id: Uuid) -> Result<i64> {
-    let row: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM phone_numbers WHERE tenant_id = $1")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM phone_numbers WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .fetch_one(pool)
+        .await?;
     Ok(row.0)
 }
 
@@ -85,4 +82,42 @@ pub async fn delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<()> {
         return Err(DbError::NotFound);
     }
     Ok(())
+}
+
+/// Assign a phone number to a campaign (also returns the updated row).
+pub async fn assign_campaign(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    phone_number_id: Uuid,
+    campaign_id: Uuid,
+) -> Result<PhoneNumber> {
+    sqlx::query_as::<_, PhoneNumber>(
+        "UPDATE phone_numbers SET campaign_id = $1, updated_at = now()
+         WHERE id = $2 AND tenant_id = $3
+         RETURNING *",
+    )
+    .bind(campaign_id)
+    .bind(phone_number_id)
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::NotFound)
+}
+
+/// Remove a phone number's campaign assignment.
+pub async fn unassign_campaign(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    phone_number_id: Uuid,
+) -> Result<PhoneNumber> {
+    sqlx::query_as::<_, PhoneNumber>(
+        "UPDATE phone_numbers SET campaign_id = NULL, updated_at = now()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING *",
+    )
+    .bind(phone_number_id)
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::NotFound)
 }

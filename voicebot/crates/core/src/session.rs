@@ -594,6 +594,184 @@ impl PipelineSession {
         Self::start(config, audio_rx, egress_tx, asr, llm, tts).await
     }
 
+    /// Start a session using providers derived from AppConfig, with custom agent tools.
+    /// Tools are generated from the campaign's `custom_metrics` config (C5).
+    pub async fn start_with_config_and_tools(
+        app_config: &AppConfig,
+        session_config: SessionConfig,
+        audio_rx: Receiver<AudioFrame>,
+        egress_tx: Sender<PipelineEvent>,
+        tools: Vec<Box<dyn agent::tool::Tool>>,
+    ) -> Result<Self, SessionError> {
+        let (asr, llm, tts) = build_providers(app_config, &session_config)?;
+        Self::start_with_handler_and_tools(
+            session_config,
+            audio_rx,
+            egress_tx,
+            asr,
+            llm,
+            tts,
+            Arc::new(LogOnProviderError),
+            tools,
+        )
+        .await
+    }
+
+    /// Internal: like `start_with_handler` but also wires tools into the AgentCore.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_with_handler_and_tools(
+        config: SessionConfig,
+        audio_rx: Receiver<AudioFrame>,
+        egress_tx: Sender<PipelineEvent>,
+        asr: Arc<dyn AsrProvider>,
+        llm: Arc<dyn LlmProvider>,
+        tts: Arc<dyn TtsProvider>,
+        failure_handler: Arc<dyn ProviderFailureHandler>,
+        tools: Vec<Box<dyn agent::tool::Tool>>,
+    ) -> Result<Self, SessionError> {
+        let cancel_token = CancellationToken::new();
+        let session_id = config.session_id;
+
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel::<PipelineEvent>(200);
+        let mut handles = Vec::new();
+
+        let (vad_audio_tx, vad_audio_rx) = tokio::sync::mpsc::channel::<AudioFrame>(16);
+        let (speech_state_tx, mut speech_state_rx) = tokio::sync::mpsc::channel::<bool>(32);
+        let (asr_done_tx, mut asr_done_rx) = tokio::sync::mpsc::channel::<u64>(8);
+
+        const PRE_BUFFER_FRAMES: usize = 15;
+        let fanout_token = cancel_token.child_token();
+        let asr_event_tx = event_tx.clone();
+        let asr_failure_handler = Arc::clone(&failure_handler);
+        let asr_for_fanout = Arc::clone(&asr);
+        handles.push(tokio::spawn(async move {
+            let mut rx = audio_rx;
+            let mut pre_buffer: VecDeque<AudioFrame> = VecDeque::with_capacity(PRE_BUFFER_FRAMES + 1);
+            let mut current_asr: Option<ActiveAsrTurn> = None;
+            let mut next_turn_id: u64 = 0;
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    _ = fanout_token.cancelled() => break,
+
+                    done_turn_id = asr_done_rx.recv() => {
+                        match done_turn_id {
+                            Some(turn_id) if current_asr.as_ref().map(|t| t.turn_id) == Some(turn_id) => {
+                                current_asr = None;
+                            }
+                            Some(_) => {}
+                            None => break,
+                        }
+                    }
+
+                    speaking = speech_state_rx.recv() => {
+                        match speaking {
+                            Some(true) => {
+                                if let Some(turn) = current_asr.as_mut() {
+                                    if turn.capture_open { continue; }
+                                    turn.cancel();
+                                }
+                                next_turn_id += 1;
+                                let turn_id = next_turn_id;
+                                let (asr_tx, asr_rx) = tokio::sync::mpsc::channel::<AudioFrame>(200);
+                                let asr_clone = Arc::clone(&asr_for_fanout);
+                                let ev_tx = asr_event_tx.clone();
+                                let handler = Arc::clone(&asr_failure_handler);
+                                let asr_cancel = fanout_token.child_token();
+                                let asr_done = asr_done_tx.clone();
+                                for buffered in pre_buffer.drain(..) {
+                                    let _ = asr_tx.try_send(buffered);
+                                }
+                                current_asr = Some(ActiveAsrTurn {
+                                    turn_id,
+                                    audio_tx: Some(asr_tx),
+                                    cancel_token: asr_cancel.clone(),
+                                    capture_open: true,
+                                });
+                                tokio::spawn(async move {
+                                    let audio_stream = ReceiverAudioStream::new(asr_rx);
+                                    let result = tokio::select! {
+                                        r = asr_clone.stream(Box::new(audio_stream), ev_tx) => r,
+                                        _ = asr_cancel.cancelled() => Ok(()),
+                                    };
+                                    if let Err(e) = result {
+                                        if !matches!(e, common::error::AsrError::ChannelClosed | common::error::AsrError::Cancelled) {
+                                            handler.on_provider_failure(Component::Asr, &e);
+                                        }
+                                    }
+                                    let _ = asr_done.send(turn_id).await;
+                                });
+                            }
+                            Some(false) => {
+                                if let Some(turn) = current_asr.as_mut() {
+                                    turn.capture_open = false;
+                                    turn.audio_tx = None;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+
+                    frame = rx.recv() => {
+                        let f = match frame { Some(f) => f, None => break };
+                        pre_buffer.push_back(f.clone());
+                        if pre_buffer.len() > PRE_BUFFER_FRAMES { pre_buffer.pop_front(); }
+                        if let Some(turn) = current_asr.as_mut() {
+                            if turn.capture_open {
+                                if let Some(tx) = turn.audio_tx.as_ref() {
+                                    let _ = tx.try_send(f.clone());
+                                }
+                            }
+                        }
+                        let _ = vad_audio_tx.send(f).await;
+                    }
+                }
+            }
+        }));
+
+        let vad_token = cancel_token.child_token();
+        let vad_event_tx = event_tx.clone();
+        let mut vad = VadComponent::new(config.vad_config.clone(), vad_event_tx, vad_token)
+            .with_speech_state(speech_state_tx);
+        handles.push(tokio::spawn(async move {
+            let audio_stream = ReceiverAudioStream::new(vad_audio_rx);
+            vad.run(Box::new(audio_stream)).await;
+        }));
+
+        let orch_token = cancel_token.child_token();
+        let mut orchestrator = Orchestrator::with_providers_and_tools(
+            session_id,
+            event_rx,
+            event_tx.clone(),
+            egress_tx,
+            orch_token,
+            llm,
+            tts,
+            Arc::clone(&failure_handler),
+            config.system_prompt.clone(),
+            tools,
+        );
+        let (turn_count, interrupt_count) = orchestrator.counter_handles();
+        handles.push(tokio::spawn(async move { orchestrator.run().await }));
+
+        crate::observability::session_started();
+        info!(session_id = %session_id, "pipeline session started (with tools)");
+
+        Ok(Self {
+            id: session_id,
+            state: SessionState::Active,
+            tenant_id: config.tenant_id,
+            campaign_id: config.campaign_id,
+            started_at: Instant::now(),
+            cancel_token,
+            task_handles: handles,
+            turn_count,
+            interrupt_count,
+        })
+    }
+
     /// Start a session using providers derived from AppConfig.
     pub async fn start_with_config(
         app_config: &AppConfig,

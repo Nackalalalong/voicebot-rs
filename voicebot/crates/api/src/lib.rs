@@ -72,6 +72,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/phone-numbers", get(routes::phone_numbers::list_phone_numbers))
         .route("/phone-numbers", post(routes::phone_numbers::provision_phone_number))
         .route("/phone-numbers/:id", delete(routes::phone_numbers::delete_phone_number))
+        .route("/phone-numbers/:id/campaign", put(routes::phone_numbers::assign_campaign))
+        .route("/phone-numbers/:id/campaign", delete(routes::phone_numbers::unassign_campaign))
         .layer(middleware::from_fn_with_state(jwt_secret, auth_middleware))
         .with_state(state.clone());
 

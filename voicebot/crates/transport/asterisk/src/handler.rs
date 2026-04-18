@@ -61,11 +61,21 @@ impl CallRegistry {
 pub struct AriTransport {
     config: AsteriskConfig,
     app_config: Arc<AppConfig>,
+    /// Optional platform context enables phone-number → campaign routing (C7).
+    db: Option<db::PgPool>,
+    redis: Option<cache::RedisPool>,
 }
 
 impl AriTransport {
     pub fn new(config: AsteriskConfig, app_config: Arc<AppConfig>) -> Self {
-        Self { config, app_config }
+        Self { config, app_config, db: None, redis: None }
+    }
+
+    /// Attach platform DB + Redis so inbound calls can be routed by phone number.
+    pub fn with_routing(mut self, db: db::PgPool, redis: cache::RedisPool) -> Self {
+        self.db = Some(db);
+        self.redis = Some(redis);
+        self
     }
 
     /// Connect to ARI and enter the event loop.
@@ -131,6 +141,8 @@ impl AriTransport {
                         let ari_config = self.config.clone();
                         let app_config = Arc::clone(&self.app_config);
                         let registry = Arc::clone(&registry);
+                        let db = self.db.clone();
+                        let redis = self.redis.clone();
 
                         tokio::spawn(async move {
                             info!(%channel_id, "StasisStart — handling call");
@@ -140,6 +152,8 @@ impl AriTransport {
                                 ari_config,
                                 app_config,
                                 session_cancel,
+                                db,
+                                redis,
                             )
                             .await
                             {
@@ -185,9 +199,42 @@ async fn handle_stasis_start(
     config: AsteriskConfig,
     app_config: Arc<AppConfig>,
     cancel: CancellationToken,
+    db: Option<db::PgPool>,
+    redis: Option<cache::RedisPool>,
 ) -> Result<(), AriError> {
     let channel_id = &channel.id;
     let session_id = Uuid::new_v4();
+
+    // C7: Resolve tenant/campaign from caller's phone number via Redis routing table.
+    let mut tenant_id: Option<Uuid> = None;
+    let mut campaign_id: Option<Uuid> = None;
+    let mut session_system_prompt: Option<String> = None;
+    let mut session_asr: Option<AsrProviderType> = None;
+    let mut session_tts: Option<TtsProviderType> = None;
+
+    if let (Some(db_pool), Some(mut redis_pool)) = (db.as_ref(), redis) {
+        let caller_number = channel.caller.as_ref().map(|c| c.number.as_str()).unwrap_or("");
+        if !caller_number.is_empty() {
+            if let Ok(Some(route)) = cache::routing::get_route(&mut redis_pool, caller_number).await {
+                tenant_id = Some(route.tenant_id);
+                campaign_id = Some(route.campaign_id);
+                info!(%session_id, %caller_number, tenant = %route.tenant_id, campaign = %route.campaign_id, "phone routing resolved");
+
+                // Load campaign config from cache or DB.
+                let cached = cache::campaign::get_config(&mut redis_pool, route.campaign_id).await.ok().flatten();
+                let campaign = if let Some(c) = cached {
+                    Some(c)
+                } else {
+                    db::queries::campaigns::get_by_id(db_pool, route.tenant_id, route.campaign_id).await.ok()
+                };
+                if let Some(c) = campaign {
+                    session_system_prompt = Some(c.system_prompt);
+                    session_asr = Some(AsrProviderType::from_str_loose(&c.asr_provider));
+                    session_tts = Some(TtsProviderType::from_str_loose(&c.tts_provider));
+                }
+            }
+        }
+    }
 
     // 1. Answer the channel.
     rest.answer_channel(channel_id).await?;
@@ -215,18 +262,18 @@ async fn handle_stasis_start(
     let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(50);
     let (egress_tx, egress_rx) = mpsc::channel::<PipelineEvent>(200);
 
-    // 6. Build session config from app-level defaults.
+    // 6. Build session config from app-level defaults, overridden by campaign routing.
     let defaults = &app_config.session_defaults;
     let session_config = SessionConfig {
         session_id,
         language: Language::from_str_loose(&defaults.language),
-        asr_provider: AsrProviderType::from_str_loose(&defaults.asr_provider),
-        tts_provider: TtsProviderType::from_str_loose(&defaults.tts_provider),
+        asr_provider: session_asr.unwrap_or_else(|| AsrProviderType::from_str_loose(&defaults.asr_provider)),
+        tts_provider: session_tts.unwrap_or_else(|| TtsProviderType::from_str_loose(&defaults.tts_provider)),
         llm_provider: LlmProviderType::from_str_loose(&defaults.llm_provider),
         vad_config: app_config.vad.clone(),
-        system_prompt: None,
-        tenant_id: None,
-        campaign_id: None,
+        system_prompt: session_system_prompt,
+        tenant_id,
+        campaign_id,
     };
 
     // 7. Start the pipeline session.

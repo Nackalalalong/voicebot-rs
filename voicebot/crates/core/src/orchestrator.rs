@@ -98,7 +98,35 @@ impl Orchestrator {
         failure_handler: Arc<dyn ProviderFailureHandler>,
         system_prompt: Option<String>,
     ) -> Self {
-        let agent = AgentCore::new(llm.clone(), vec![], system_prompt, CancellationToken::new());
+        Self::with_providers_and_tools(
+            session_id,
+            event_rx,
+            event_tx,
+            egress_tx,
+            cancel_token,
+            llm,
+            tts,
+            failure_handler,
+            system_prompt,
+            vec![],
+        )
+    }
+
+    /// Create an orchestrator with providers and a set of agent tools.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_providers_and_tools(
+        session_id: Uuid,
+        event_rx: Receiver<PipelineEvent>,
+        event_tx: Sender<PipelineEvent>,
+        egress_tx: Sender<PipelineEvent>,
+        cancel_token: CancellationToken,
+        llm: Arc<dyn LlmProvider>,
+        tts: Arc<dyn TtsProvider>,
+        failure_handler: Arc<dyn ProviderFailureHandler>,
+        system_prompt: Option<String>,
+        tools: Vec<Box<dyn agent::tool::Tool>>,
+    ) -> Self {
+        let agent = AgentCore::new(llm.clone(), tools, system_prompt, CancellationToken::new());
         Self {
             state: OrchestratorState::Idle,
             session_id,

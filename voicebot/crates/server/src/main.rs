@@ -36,19 +36,27 @@ async fn main() {
     // Extract listen address before moving config into Arc
     let listen_addr = format!("{}:{}", config.server.host, config.server.port);
 
-    // Start ARI transport if configured.
+    // Extract optional platform services once so both HTTP and ARI transports can share them.
     let asterisk_config = config.asterisk.clone();
     let config_arc = Arc::new(config);
+    let platform = build_platform_context(Arc::clone(&config_arc)).await.map(Arc::new);
 
+    // Start ARI transport if configured.
     if let Some(ari_cfg) = asterisk_config {
         let app_config = Arc::clone(&config_arc);
+        let ari_platform = platform.clone();
         tokio::spawn(async move {
             tracing::info!(
                 ari_host = %ari_cfg.ari_host,
                 ari_port = ari_cfg.ari_port,
                 "starting ARI transport"
             );
-            let transport = transport_asterisk::AriTransport::new(ari_cfg, app_config);
+            let transport = if let Some(platform) = ari_platform {
+                transport_asterisk::AriTransport::new(ari_cfg, app_config)
+                    .with_routing(platform.db.clone(), platform.redis.clone())
+            } else {
+                transport_asterisk::AriTransport::new(ari_cfg, app_config)
+            };
             if let Err(e) = transport.run().await {
                 tracing::error!("ARI transport error: {}", e);
             }
@@ -57,10 +65,10 @@ async fn main() {
 
     // Optionally connect to DB + Redis for platform features (JWT auth, CDR, session tracking).
     // Falls back to config-only mode when env vars are absent.
-    let app = match build_platform_context(Arc::clone(&config_arc)).await {
+    let app = match platform {
         Some(platform) => {
             tracing::info!("platform context ready — using authenticated router");
-            transport_websocket::handler::router_with_platform(config_arc, Arc::new(platform))
+            transport_websocket::handler::router_with_platform(config_arc, platform)
         }
         None => {
             tracing::info!("no platform credentials — using unauthenticated router");

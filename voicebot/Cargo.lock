@@ -4261,7 +4261,9 @@ dependencies = [
 name = "transport-asterisk"
 version = "0.1.0"
 dependencies = [
+ "cache",
  "common",
+ "db",
  "futures",
  "reqwest",
  "serde",

@@ -637,91 +637,91 @@ scheduler → common, db, cache, storage
 
 | # | Task | Status |
 |---|---|---|
-| A1 | Create `crates/db` — sqlx setup, PgPool, DATABASE_URL config | |
-| A2 | Write migrations: tenants, users, campaigns, prompt_versions, contacts, contact_lists, call_records, phone_numbers, usage_records | |
-| A3 | DB query functions — CRUD for all entities, pagination helpers | |
-| A4 | Create `crates/cache` — Redis MultiplexedConnection, session state read/write, config cache get/set, pub/sub | |
-| A5 | Create `crates/auth` — JWT issue/validate, argon2 password hashing, Axum middleware (extract tenant_id + user_id from token) | |
-| A6 | Create `crates/storage` — S3 client abstraction, upload/download/presigned-url, bucket init | |
-| A7 | PostgreSQL RLS policies as defense-in-depth (SET LOCAL app.tenant_id per transaction) | |
-| A8 | Integration tests for DB + cache + storage layers | |
+| A1 | Create `crates/db` — sqlx setup, PgPool, DATABASE_URL config | ✅ Done |
+| A2 | Write migrations: tenants, users, campaigns, prompt_versions, contacts, contact_lists, call_records, phone_numbers, usage_records | ✅ Done |
+| A3 | DB query functions — CRUD for all entities, pagination helpers | ✅ Done |
+| A4 | Create `crates/cache` — Redis MultiplexedConnection, session state read/write, config cache get/set, pub/sub | ✅ Done |
+| A5 | Create `crates/auth` — JWT issue/validate, argon2 password hashing, Axum middleware (extract tenant_id + user_id from token) | ✅ Done |
+| A6 | Create `crates/storage` — S3 client abstraction, upload/download/presigned-url, bucket init | ✅ Done |
+| A7 | PostgreSQL RLS policies as defense-in-depth (SET LOCAL app.tenant_id per transaction) | 🟡 Partial — migrations exist, SET LOCAL not applied per-transaction |
+| A8 | Integration tests for DB + cache + storage layers | ❌ Not done |
 
 #### Phase B — Management API
 
 | # | Task | Status |
 |---|---|---|
-| B1 | Create `crates/api` — Axum router on `/api`, shared AppState (PgPool, Redis, S3) | |
-| B2 | Auth endpoints: register, login, refresh, logout | |
-| B3 | Tenant endpoints: profile, settings, usage | |
-| B4 | User management: list, invite, update role, remove | |
-| B5 | Campaign CRUD + activate/pause lifecycle (publish config to Redis on activate) | |
-| B6 | Contact list upload (CSV parsing) + CRUD | |
-| B7 | Call records: paginated queries, single call detail, analytics aggregation | |
-| B8 | Phone number management: add, map to campaign, remove | |
-| B9 | Session token generation (short-lived JWT for WS auth) | |
-| B10 | SSE endpoint for live campaign metrics | |
-| B11 | Usage tracking: record call minutes, concurrent peak, storage bytes | |
-| B12 | OpenAPI spec generation with utoipa | |
-| B13 | API integration tests (axum-test) | |
+| B1 | Create `crates/api` — Axum router on `/api`, shared AppState (PgPool, Redis, S3) | ✅ Done |
+| B2 | Auth endpoints: register, login, refresh, logout | ✅ Done |
+| B3 | Tenant endpoints: profile, settings, usage | ✅ Done |
+| B4 | User management: list, invite, update role, remove | ✅ Done |
+| B5 | Campaign CRUD + activate/pause lifecycle (publish config to Redis on activate) | ✅ Done |
+| B6 | Contact list upload (CSV parsing) + CRUD | ✅ Done |
+| B7 | Call records: paginated queries, single call detail, analytics aggregation | ✅ Done |
+| B8 | Phone number management: add, map to campaign, remove | ✅ Done |
+| B9 | Session token generation (short-lived JWT for WS auth) | ✅ Done |
+| B10 | SSE endpoint for live campaign metrics | ✅ Done (`/metrics/live`, `/sessions/live`) |
+| B11 | Usage tracking: record call minutes, concurrent peak, storage bytes | ✅ Done |
+| B12 | OpenAPI spec generation with utoipa | ❌ Not done |
+| B13 | API integration tests (axum-test) | ❌ Not done |
 
 #### Phase C — Stateless Core
 
 | # | Task | Status |
 |---|---|---|
-| C1 | Campaign config resolution: Redis cache → PG fallback on session start | |
-| C2 | Redis-backed ConversationMemory (replace in-memory Vec, with fallback) | |
-| C3 | Concurrent session limit enforcement via Redis SCARD/SADD | |
-| C4 | CDR accumulation during call + async flush to PG on session end | |
-| C5 | Auto-generate agent tools from campaign custom_metrics definitions | |
-| C6 | Campaign config hot-reload via Redis pub/sub | |
-| C7 | Phone number → campaign routing table (Redis lookup) | |
-| C8 | WS auth: validate token from query param, extract campaign_id + tenant_id | |
-| C9 | Call recording: configurable audio stream to S3 via multipart upload | |
-| C10 | Usage metering: emit call_minutes + recording_bytes on session end | |
+| C1 | Campaign config resolution: Redis cache → PG fallback on session start | ✅ Done |
+| C2 | Redis-backed ConversationMemory (replace in-memory Vec, with fallback) | ❌ Not done — still in-memory Vec |
+| C3 | Concurrent session limit enforcement via Redis SCARD/SADD | ✅ Done |
+| C4 | CDR accumulation during call + async flush to PG on session end | ✅ Done |
+| C5 | Auto-generate agent tools from campaign custom_metrics definitions | ✅ Done |
+| C6 | Campaign config hot-reload via Redis pub/sub | ❌ Not done |
+| C7 | Phone number → campaign routing table (Redis lookup) | ✅ Done |
+| C8 | WS auth: validate token from query param, extract campaign_id + tenant_id | ✅ Done |
+| C9 | Call recording: configurable audio stream to S3 via multipart upload | ✅ Done (WAV buffer → S3 on session end) |
+| C10 | Usage metering: emit call_minutes + recording_bytes on session end | ✅ Done |
 
 #### Phase D — Campaign Scheduler
 
 | # | Task | Status |
 |---|---|---|
-| D1 | Create `crates/scheduler` binary — apalis with PG backend | |
-| D2 | Outbound dialer job: pick pending contacts, originate calls via ARI REST | |
-| D3 | Retry logic: exponential backoff, max attempts, update contact status | |
-| D4 | Schedule enforcement: time windows, timezone-aware (chrono-tz) | |
-| D5 | Rate limiting: calls per minute per campaign | |
-| D6 | Campaign completion detection: all contacts processed → status = completed | |
-| D7 | Post-call analysis job: LLM analysis of transcript → extract custom metrics, sentiment, summary | |
-| D8 | Post-call analysis results written to call_records.analysis JSONB | |
+| D1 | Create `crates/scheduler` binary — apalis with PG backend | ✅ Done |
+| D2 | Outbound dialer job: pick pending contacts, originate calls via ARI REST | ✅ Done |
+| D3 | Retry logic: exponential backoff, max attempts, update contact status | ✅ Done |
+| D4 | Schedule enforcement: time windows, timezone-aware (chrono-tz) | ✅ Done |
+| D5 | Rate limiting: calls per minute per campaign | ✅ Done |
+| D6 | Campaign completion detection: all contacts processed → status = completed | ✅ Done |
+| D7 | Post-call analysis job: LLM analysis of transcript → extract custom metrics, sentiment, summary | ✅ Done |
+| D8 | Post-call analysis results written to call_records.analysis JSONB | ✅ Done |
 
 #### Phase E — Dashboard Frontend
 
 | # | Task | Status |
 |---|---|---|
-| E1 | Scaffold Next.js 15 + TS + Tailwind v4 + shadcn/ui + TanStack Query in `dashboard/` | |
-| E2 | Auth flow: login page, httpOnly cookie JWT, middleware route protection | |
-| E3 | API proxy routes: catch-all `/api/proxy/[...path]` → Rust API | |
-| E4 | SSE proxy route: streaming passthrough for live metrics | |
-| E5 | Overview page: campaign cards, call volume chart, active calls count (SSE) | |
-| E6 | Campaign list page: table with filters, create button | |
-| E7 | Campaign detail — config tab: system prompt editor, model/voice selection | |
-| E8 | Campaign detail — metrics tab: custom metrics builder | |
-| E9 | Campaign detail — contacts tab: CSV upload, contact table | |
-| E10 | Campaign detail — analytics tab: charts (recharts), metric aggregations | |
-| E11 | Campaign detail — calls tab: paginated log, transcript viewer, recording playback | |
-| E12 | Live monitor page: active calls table with SSE | |
-| E13 | Settings pages: users, providers, phone numbers, recording prefs, usage | |
+| E1 | Scaffold Next.js 15 + TS + Tailwind v4 + shadcn/ui + TanStack Query in `dashboard/` | ✅ Done |
+| E2 | Auth flow: login page, httpOnly cookie JWT, middleware route protection | ✅ Done |
+| E3 | API proxy routes: catch-all `/api/proxy/[...path]` → Rust API | ✅ Done |
+| E4 | SSE proxy route: streaming passthrough for live metrics | ✅ Done |
+| E5 | Overview page: campaign cards, call volume chart, active calls count (SSE) | ✅ Done |
+| E6 | Campaign list page: table with filters, create button | ✅ Done |
+| E7 | Campaign detail — config tab: system prompt editor, model/voice selection | ✅ Done |
+| E8 | Campaign detail — metrics tab: custom metrics builder | ✅ Done |
+| E9 | Campaign detail — contacts tab: CSV upload, contact table | ✅ Done |
+| E10 | Campaign detail — analytics tab: charts (recharts), metric aggregations | ✅ Done |
+| E11 | Campaign detail — calls tab: paginated log, transcript viewer, recording playback | ✅ Done |
+| E12 | Live monitor page: active calls table with SSE | ✅ Done |
+| E13 | Settings pages: users, providers, phone numbers, recording prefs, usage | ✅ Done |
 
 #### Phase F — Integration & Hardening
 
 | # | Task | Status |
 |---|---|---|
-| F1 | E2E: create campaign → activate → inbound call → CDR written → appears in dashboard | |
-| F2 | E2E: outbound campaign → scheduler dials → call completes → post-call analysis runs | |
-| F3 | Multi-tenant isolation tests: verify tenant A cannot see tenant B's data (app-level + RLS) | |
-| F4 | Recording E2E: call with recording_enabled → audio in S3 → playback from dashboard | |
-| F5 | Load test: 50 concurrent sessions across 5 tenants | |
-| F6 | Docker Compose: full stack (PG + Redis + RustFS + Speaches + Asterisk + API + Core + Scheduler + Dashboard) | |
-| F7 | Health check endpoints + readiness probes for all services | |
-| F8 | Usage tracking accuracy test: verify call minutes match actual call durations | |
+| F1 | E2E: create campaign → activate → inbound call → CDR written → appears in dashboard | ❌ Not done |
+| F2 | E2E: outbound campaign → scheduler dials → call completes → post-call analysis runs | ❌ Not done |
+| F3 | Multi-tenant isolation tests: verify tenant A cannot see tenant B's data (app-level + RLS) | ❌ Not done |
+| F4 | Recording E2E: call with recording_enabled → audio in S3 → playback from dashboard | ❌ Not done |
+| F5 | Load test: 50 concurrent sessions across 5 tenants | ❌ Not done |
+| F6 | Docker Compose: full stack (PG + Redis + RustFS + Speaches + Asterisk + API + Core + Scheduler + Dashboard) | ✅ Done |
+| F7 | Health check endpoints + readiness probes for all services | ✅ Done |
+| F8 | Usage tracking accuracy test: verify call minutes match actual call durations | ❌ Not done |
 
 ---
 

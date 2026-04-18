@@ -20,20 +20,17 @@ pub async fn stream_events(
 ) -> impl IntoResponse {
     let tenant_id = user.tenant_id;
 
-    let tick_stream = tokio_stream::wrappers::IntervalStream::new(
-        tokio::time::interval(Duration::from_secs(15)),
-    );
+    let tick_stream =
+        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(15)));
 
     let event_stream = tick_stream.map(move |_| {
-        let event = Event::default()
-            .event("heartbeat")
-            .data(
-                serde_json::json!({
-                    "tenant_id": tenant_id,
-                    "ts": chrono::Utc::now().to_rfc3339(),
-                })
-                .to_string(),
-            );
+        let event = Event::default().event("heartbeat").data(
+            serde_json::json!({
+                "tenant_id": tenant_id,
+                "ts": chrono::Utc::now().to_rfc3339(),
+            })
+            .to_string(),
+        );
         Ok::<_, Infallible>(event)
     });
 
@@ -52,9 +49,8 @@ pub async fn stream_metrics_live(
 ) -> impl IntoResponse {
     let db = state.db.clone();
 
-    let tick_stream = tokio_stream::wrappers::IntervalStream::new(
-        tokio::time::interval(Duration::from_secs(5)),
-    );
+    let tick_stream =
+        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(5)));
 
     let event_stream = tick_stream.then(move |_| {
         let db = db.clone();
@@ -85,9 +81,8 @@ pub async fn stream_sessions_live(
 ) -> impl IntoResponse {
     let db = state.db.clone();
 
-    let tick_stream = tokio_stream::wrappers::IntervalStream::new(
-        tokio::time::interval(Duration::from_secs(5)),
-    );
+    let tick_stream =
+        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(5)));
 
     let event_stream = tick_stream.then(move |_| {
         let db = db.clone();
@@ -103,9 +98,7 @@ pub async fn stream_sessions_live(
                 .map(|r| {
                     let duration_secs = r
                         .started_at
-                        .map(|s| {
-                            (chrono::Utc::now() - s).num_seconds().max(0) as u64
-                        })
+                        .map(|s| (chrono::Utc::now() - s).num_seconds().max(0) as u64)
                         .unwrap_or(0);
                     serde_json::json!({
                         "session_id": r.session_id,

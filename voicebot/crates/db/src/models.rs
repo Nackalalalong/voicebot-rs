@@ -10,6 +10,7 @@ pub struct Tenant {
     pub slug: String,
     pub plan: String,
     pub is_active: bool,
+    pub max_concurrent_sessions: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -108,6 +109,7 @@ pub struct PhoneNumber {
     pub status: String,
     pub capabilities: serde_json::Value,
     pub monthly_cost_usd_cents: Option<i64>,
+    pub campaign_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

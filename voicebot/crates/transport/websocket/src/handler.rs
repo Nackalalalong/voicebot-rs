@@ -377,6 +377,7 @@ async fn handle_connection_platform(
     let mut session_asr: Option<AsrProviderType> = None;
     let mut session_tts: Option<TtsProviderType> = None;
     let mut recording_enabled = false;
+    let mut campaign_custom_metrics = serde_json::Value::Null;
 
     if let Some(cid) = campaign_id {
         let mut redis = platform.redis.clone();
@@ -404,12 +405,38 @@ async fn handle_connection_platform(
             session_asr = Some(AsrProviderType::from_str_loose(&c.asr_provider));
             session_tts = Some(TtsProviderType::from_str_loose(&c.tts_provider));
             recording_enabled = c.recording_enabled;
+            campaign_custom_metrics = c.custom_metrics;
         }
     }
 
-    // Track active session in Redis
+    // Build auto-generated tools from campaign custom_metrics (C5).
+    let (campaign_tools, captured_metrics): (
+        Vec<Box<dyn voicebot_core::agent::tool::Tool>>,
+        std::sync::Arc<tokio::sync::Mutex<serde_json::Map<String, serde_json::Value>>>,
+    ) = voicebot_core::agent::tools_from_metrics(&campaign_custom_metrics);
+
+    // Track active session in Redis + enforce max_concurrent_sessions limit.
     let mut redis = platform.redis.clone();
     let active_key = format!("tenant:{}:active_sessions", tenant_id);
+
+    // Fetch the tenant concurrently with the concurrent-limit check.
+    let max_concurrent = match db::queries::tenants::get_by_id(&platform.db, tenant_id).await {
+        Ok(t) => t.max_concurrent_sessions as i64,
+        Err(e) => {
+            tracing::warn!(%session_id, %tenant_id, error = %e, "failed to fetch tenant; using default limit 10");
+            10
+        }
+    };
+    let active_count: i64 = redis.scard::<_, i64>(&active_key).await.unwrap_or(0);
+    if active_count >= max_concurrent {
+        tracing::warn!(
+            %session_id, %tenant_id,
+            active = active_count, limit = max_concurrent,
+            "concurrent session limit reached — rejecting new session"
+        );
+        return; // WS upgrade already happened; transport will close the socket.
+    }
+
     let _ = redis.sadd::<_, _, ()>(&active_key, session_id.to_string()).await;
 
     // Wait for session_start with 10s timeout
@@ -463,7 +490,7 @@ async fn handle_connection_platform(
         tokio::sync::mpsc::channel::<PipelineEvent>(channel_config.event_bus_capacity);
 
     let session_result =
-        PipelineSession::start_with_config(&app_config, session_start.pipeline_config, audio_rx, egress_tx).await;
+        PipelineSession::start_with_config_and_tools(&app_config, session_start.pipeline_config, audio_rx, egress_tx, campaign_tools).await;
     let mut session = match session_result {
         Ok(s) => s,
         Err(e) => {
@@ -532,11 +559,11 @@ async fn handle_connection_platform(
         None
     };
 
-    // Finalize CDR
-    let custom_metrics = serde_json::json!({
-        "turn_count": stats.turn_count,
-        "interrupt_count": stats.interrupt_count,
-    });
+    // Finalize CDR — merge captured metrics from auto-generated tools (C5).
+    let mut custom_metrics_map = captured_metrics.lock().await.clone();
+    custom_metrics_map.insert("turn_count".into(), stats.turn_count.into());
+    custom_metrics_map.insert("interrupt_count".into(), stats.interrupt_count.into());
+    let custom_metrics = serde_json::Value::Object(custom_metrics_map);
     let _ = db::queries::call_records::finalize(
         &platform.db,
         tenant_id,
