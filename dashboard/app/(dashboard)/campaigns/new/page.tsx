@@ -114,7 +114,9 @@ export default function NewCampaignPage() {
                         />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium mb-1">Max Duration (secs)</label>
+                        <label className="block text-sm font-medium mb-1">
+                            Max Duration (secs)
+                        </label>
                         <input
                             type="number"
                             className="w-full border rounded px-3 py-2 text-sm"
@@ -131,7 +133,9 @@ export default function NewCampaignPage() {
                         checked={form.recording_enabled}
                         onChange={(e) => set('recording_enabled', e.target.checked)}
                     />
-                    <label htmlFor="rec" className="text-sm">Enable call recording</label>
+                    <label htmlFor="rec" className="text-sm">
+                        Enable call recording
+                    </label>
                 </div>
 
                 <div>

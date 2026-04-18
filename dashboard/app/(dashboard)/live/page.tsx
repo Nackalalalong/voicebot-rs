@@ -69,7 +69,9 @@ export default function LiveMonitorPage() {
                         <tbody className="divide-y">
                             {calls.map((c) => (
                                 <tr key={c.session_id}>
-                                    <td className="px-4 py-3 font-mono text-xs">{c.session_id.slice(0, 8)}…</td>
+                                    <td className="px-4 py-3 font-mono text-xs">
+                                        {c.session_id.slice(0, 8)}…
+                                    </td>
                                     <td className="px-4 py-3 font-mono">{c.phone_number}</td>
                                     <td className="px-4 py-3 capitalize">{c.direction}</td>
                                     <td className="px-4 py-3">{c.campaign_id ?? '—'}</td>

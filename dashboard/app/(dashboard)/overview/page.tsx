@@ -29,7 +29,8 @@ export default function OverviewPage() {
         return () => es.close();
     }, []);
 
-    const activeCampaigns = campaigns?.items?.filter((c: any) => c.status === 'active').length ?? '—';
+    const activeCampaigns =
+        campaigns?.items?.filter((c: any) => c.status === 'active').length ?? '—';
 
     return (
         <div>
@@ -78,15 +79,7 @@ export default function OverviewPage() {
     );
 }
 
-function StatCard({
-    label,
-    value,
-    live,
-}: {
-    label: string;
-    value: string | number;
-    live?: boolean;
-}) {
+function StatCard({label, value, live}: {label: string; value: string | number; live?: boolean}) {
     return (
         <div className="bg-white rounded-lg shadow p-5">
             <div className="flex items-center justify-between mb-1">

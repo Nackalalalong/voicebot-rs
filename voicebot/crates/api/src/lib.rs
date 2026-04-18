@@ -34,6 +34,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let protected = Router::new()
         // SSE
         .route("/events", get(routes::sse::stream_events))
+        .route("/metrics/live", get(routes::sse::stream_metrics_live))
+        .route("/sessions/live", get(routes::sse::stream_sessions_live))
         // Tenants (superadmin only — enforced inside handlers)
         .route("/tenants", get(routes::tenants::list_tenants))
         .route("/tenants", post(routes::tenants::create_tenant))

@@ -122,8 +122,18 @@ function ConfigTab({campaign, id, qc}: {campaign: any; id: string; qc: any}) {
                 <Info label="Voice" value={campaign.voice_id ?? '—'} />
                 <Info label="ASR Model" value={campaign.asr_model ?? '—'} />
                 <Info label="LLM Model" value={campaign.llm_model ?? '—'} />
-                <Info label="Recording" value={campaign.recording_enabled ? 'Enabled' : 'Disabled'} />
-                <Info label="Max Duration" value={campaign.max_call_duration_secs ? `${campaign.max_call_duration_secs}s` : '—'} />
+                <Info
+                    label="Recording"
+                    value={campaign.recording_enabled ? 'Enabled' : 'Disabled'}
+                />
+                <Info
+                    label="Max Duration"
+                    value={
+                        campaign.max_call_duration_secs
+                            ? `${campaign.max_call_duration_secs}s`
+                            : '—'
+                    }
+                />
             </div>
             <div>
                 <label className="block text-sm font-medium mb-1">System Prompt</label>
@@ -179,7 +189,9 @@ function ContactsTab({id, qc}: {id: string; qc: any}) {
             <div className="bg-white rounded-lg shadow p-4 flex items-center gap-4 flex-wrap">
                 <div>
                     <p className="text-sm font-medium">Import contacts from CSV</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Required: phone_number. Optional: name, metadata</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                        Required: phone_number. Optional: name, metadata
+                    </p>
                 </div>
                 <div className="ml-auto flex items-center gap-3">
                     <input ref={fileRef} type="file" accept=".csv" className="text-sm" />
@@ -255,11 +267,17 @@ function CallsTab({id}: {id: string}) {
                                     <td className="px-4 py-3 font-mono">{c.phone_number}</td>
                                     <td className="px-4 py-3 capitalize">{c.direction}</td>
                                     <td className="px-4 py-3 capitalize">{c.status}</td>
-                                    <td className="px-4 py-3">{c.duration_secs != null ? `${c.duration_secs}s` : '—'}</td>
-                                    <td className="px-4 py-3 capitalize">{c.sentiment ?? '—'}</td>
-                                    <td className="px-4 py-3">{new Date(c.created_at).toLocaleString()}</td>
                                     <td className="px-4 py-3">
-                                        <Link href={`/calls/${c.id}`} className="text-blue-600 text-xs hover:underline">
+                                        {c.duration_secs != null ? `${c.duration_secs}s` : '—'}
+                                    </td>
+                                    <td className="px-4 py-3 capitalize">{c.sentiment ?? '—'}</td>
+                                    <td className="px-4 py-3">
+                                        {new Date(c.created_at).toLocaleString()}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <Link
+                                            href={`/calls/${c.id}`}
+                                            className="text-blue-600 text-xs hover:underline">
                                             View
                                         </Link>
                                     </td>
@@ -282,15 +300,24 @@ function AnalyticsTab({id}: {id: string}) {
     if (isLoading) return <p className="text-gray-500 text-sm">Loading…</p>;
     if (!data) return <p className="text-gray-400 text-sm">No analytics yet.</p>;
 
-    const sentimentCounts = (data.sentiment_breakdown ?? []) as {sentiment: string; count: number}[];
+    const sentimentCounts = (data.sentiment_breakdown ?? []) as {
+        sentiment: string;
+        count: number;
+    }[];
 
     return (
         <div className="space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <AnalyticCard label="Total Calls" value={data.total_calls ?? 0} />
                 <AnalyticCard label="Completed" value={data.completed_calls ?? 0} />
-                <AnalyticCard label="Avg Duration" value={data.avg_duration_secs ? `${Math.round(data.avg_duration_secs)}s` : '—'} />
-                <AnalyticCard label="Answer Rate" value={data.answer_rate ? `${Math.round(data.answer_rate * 100)}%` : '—'} />
+                <AnalyticCard
+                    label="Avg Duration"
+                    value={data.avg_duration_secs ? `${Math.round(data.avg_duration_secs)}s` : '—'}
+                />
+                <AnalyticCard
+                    label="Answer Rate"
+                    value={data.answer_rate ? `${Math.round(data.answer_rate * 100)}%` : '—'}
+                />
             </div>
             {sentimentCounts.length > 0 && (
                 <div className="bg-white rounded-lg shadow p-5">
@@ -301,14 +328,18 @@ function AnalyticsTab({id}: {id: string}) {
                             const pct = total > 0 ? Math.round((count / total) * 100) : 0;
                             return (
                                 <div key={sentiment} className="flex items-center gap-3">
-                                    <span className="w-20 text-xs capitalize text-gray-600">{sentiment}</span>
+                                    <span className="w-20 text-xs capitalize text-gray-600">
+                                        {sentiment}
+                                    </span>
                                     <div className="flex-1 bg-gray-100 rounded h-4 overflow-hidden">
                                         <div
                                             className={`h-full rounded ${sentiment === 'positive' ? 'bg-green-500' : sentiment === 'negative' ? 'bg-red-400' : 'bg-yellow-400'}`}
                                             style={{width: `${pct}%`}}
                                         />
                                     </div>
-                                    <span className="text-xs text-gray-500 w-16 text-right">{count} ({pct}%)</span>
+                                    <span className="text-xs text-gray-500 w-16 text-right">
+                                        {count} ({pct}%)
+                                    </span>
                                 </div>
                             );
                         })}
@@ -379,7 +410,8 @@ function StatusBadge({status}: {status: string}) {
         draft: 'bg-blue-100 text-blue-600',
     };
     return (
-        <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${colors[status] ?? 'bg-gray-100 text-gray-600'}`}>
+        <span
+            className={`text-xs px-2 py-0.5 rounded-full capitalize ${colors[status] ?? 'bg-gray-100 text-gray-600'}`}>
             {status}
         </span>
     );

@@ -26,7 +26,11 @@ pub async fn register(
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<(StatusCode, Json<RegisterResponse>)> {
     // Validate slug format: lowercase alphanumeric + hyphens
-    if !req.org_slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !req
+        .org_slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
         return Err(crate::error::ApiError::BadRequest(
             "slug must be lowercase alphanumeric with hyphens only".into(),
         ));
@@ -37,15 +41,33 @@ pub async fn register(
         .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
 
     // Create tenant + owner user atomically
-    let (tenant, user) =
-        db::queries::tenants::create_with_owner(&state.db, &req.org_name, &req.org_slug, &req.email, &hash, &req.display_name)
-            .await
-            .map_err(crate::error::ApiError::from)?;
+    let (tenant, user) = db::queries::tenants::create_with_owner(
+        &state.db,
+        &req.org_name,
+        &req.org_slug,
+        &req.email,
+        &hash,
+        &req.display_name,
+    )
+    .await
+    .map_err(crate::error::ApiError::from)?;
 
-    let access_token = auth::issue_access_token(&state.jwt_secret, user.id, tenant.id, &user.email, &user.role)
-        .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
-    let refresh_token = auth::issue_refresh_token(&state.jwt_secret, user.id, tenant.id, &user.email, &user.role)
-        .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
+    let access_token = auth::issue_access_token(
+        &state.jwt_secret,
+        user.id,
+        tenant.id,
+        &user.email,
+        &user.role,
+    )
+    .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
+    let refresh_token = auth::issue_refresh_token(
+        &state.jwt_secret,
+        user.id,
+        tenant.id,
+        &user.email,
+        &user.role,
+    )
+    .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
 
     Ok((
         StatusCode::CREATED,
@@ -98,7 +120,9 @@ pub async fn login(
         .map_err(|e| crate::error::ApiError::Unauthorized(e.to_string()))?;
 
     if !valid {
-        return Err(crate::error::ApiError::Unauthorized("invalid credentials".into()));
+        return Err(crate::error::ApiError::Unauthorized(
+            "invalid credentials".into(),
+        ));
     }
 
     let access_token = auth::issue_access_token(
@@ -148,11 +172,17 @@ pub async fn refresh(
         .map_err(|e| crate::error::ApiError::Unauthorized(e.to_string()))?;
 
     if claims.token_type != "refresh" {
-        return Err(crate::error::ApiError::Unauthorized("invalid token type".into()));
+        return Err(crate::error::ApiError::Unauthorized(
+            "invalid token type".into(),
+        ));
     }
 
-    let user_id = claims.user_id().map_err(|e| crate::error::ApiError::Unauthorized(e.to_string()))?;
-    let tenant_id = claims.tenant_id().map_err(|e| crate::error::ApiError::Unauthorized(e.to_string()))?;
+    let user_id = claims
+        .user_id()
+        .map_err(|e| crate::error::ApiError::Unauthorized(e.to_string()))?;
+    let tenant_id = claims
+        .tenant_id()
+        .map_err(|e| crate::error::ApiError::Unauthorized(e.to_string()))?;
 
     let access_token = auth::issue_access_token(
         &state.jwt_secret,

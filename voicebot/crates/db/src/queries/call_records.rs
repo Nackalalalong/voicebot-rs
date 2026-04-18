@@ -39,23 +39,20 @@ pub async fn create(pool: &PgPool, req: CreateCallRecord<'_>) -> Result<CallReco
 }
 
 pub async fn get_by_id(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<CallRecord> {
-    sqlx::query_as::<_, CallRecord>(
-        "SELECT * FROM call_records WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(DbError::NotFound)
+    sqlx::query_as::<_, CallRecord>("SELECT * FROM call_records WHERE id = $1 AND tenant_id = $2")
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
 }
 
 pub async fn get_by_session_id(pool: &PgPool, session_id: &str) -> Result<Option<CallRecord>> {
-    let record = sqlx::query_as::<_, CallRecord>(
-        "SELECT * FROM call_records WHERE session_id = $1",
-    )
-    .bind(session_id)
-    .fetch_optional(pool)
-    .await?;
+    let record =
+        sqlx::query_as::<_, CallRecord>("SELECT * FROM call_records WHERE session_id = $1")
+            .bind(session_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(record)
 }
 
@@ -90,17 +87,21 @@ pub async fn list(
 
 pub async fn count(pool: &PgPool, tenant_id: Uuid, campaign_id: Option<Uuid>) -> Result<i64> {
     let row: (i64,) = match campaign_id {
-        Some(cid) => sqlx::query_as(
-            "SELECT COUNT(*) FROM call_records WHERE tenant_id = $1 AND campaign_id = $2",
-        )
-        .bind(tenant_id)
-        .bind(cid)
-        .fetch_one(pool)
-        .await?,
-        None => sqlx::query_as("SELECT COUNT(*) FROM call_records WHERE tenant_id = $1")
+        Some(cid) => {
+            sqlx::query_as(
+                "SELECT COUNT(*) FROM call_records WHERE tenant_id = $1 AND campaign_id = $2",
+            )
             .bind(tenant_id)
+            .bind(cid)
             .fetch_one(pool)
-            .await?,
+            .await?
+        }
+        None => {
+            sqlx::query_as("SELECT COUNT(*) FROM call_records WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_one(pool)
+                .await?
+        }
     };
     Ok(row.0)
 }
@@ -142,14 +143,12 @@ pub async fn set_sentiment(
     id: Uuid,
     sentiment: &str,
 ) -> Result<()> {
-    sqlx::query(
-        "UPDATE call_records SET sentiment = $1 WHERE id = $2 AND tenant_id = $3",
-    )
-    .bind(sentiment)
-    .bind(id)
-    .bind(tenant_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE call_records SET sentiment = $1 WHERE id = $2 AND tenant_id = $3")
+        .bind(sentiment)
+        .bind(id)
+        .bind(tenant_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -224,6 +223,40 @@ pub async fn sentiment_breakdown(
     )
     .bind(tenant_id)
     .bind(campaign_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Count calls with no ended_at (currently active).
+pub async fn count_active(pool: &PgPool, tenant_id: Uuid) -> Result<i64> {
+    let row: (i64,) =
+        sqlx::query_as("SELECT COUNT(*)::bigint FROM call_records WHERE tenant_id = $1 AND ended_at IS NULL")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(row.0)
+}
+
+/// Active call row for live monitor SSE.
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct ActiveCallRow {
+    pub session_id: String,
+    pub phone_number: String,
+    pub direction: String,
+    pub campaign_id: Option<Uuid>,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// List calls with no ended_at — used by the live monitor SSE stream.
+pub async fn list_active(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ActiveCallRow>> {
+    let rows = sqlx::query_as::<_, ActiveCallRow>(
+        r#"SELECT session_id, phone_number, direction, campaign_id, started_at
+           FROM call_records
+           WHERE tenant_id = $1 AND ended_at IS NULL
+           ORDER BY created_at ASC"#,
+    )
+    .bind(tenant_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)

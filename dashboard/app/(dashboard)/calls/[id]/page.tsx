@@ -36,7 +36,9 @@ export default function CallDetailPage() {
             <div className="bg-white rounded-lg shadow p-4 mb-4 grid grid-cols-2 gap-4 text-sm">
                 <div>
                     <p className="text-xs text-gray-500">Duration</p>
-                    <p className="font-medium">{call.duration_secs != null ? `${call.duration_secs}s` : '—'}</p>
+                    <p className="font-medium">
+                        {call.duration_secs != null ? `${call.duration_secs}s` : '—'}
+                    </p>
                 </div>
                 <div>
                     <p className="text-xs text-gray-500">Date</p>

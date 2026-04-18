@@ -165,11 +165,21 @@ function UsageTab() {
             ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                     <UsageCard label="Total Calls" value={data?.total_calls ?? 0} />
-                    <UsageCard label="Total Minutes" value={data?.total_minutes != null ? `${Math.round(data.total_minutes)}m` : '—'} />
+                    <UsageCard
+                        label="Total Minutes"
+                        value={
+                            data?.total_minutes != null ? `${Math.round(data.total_minutes)}m` : '—'
+                        }
+                    />
                     <UsageCard label="Unique Callers" value={data?.unique_callers ?? 0} />
                     <UsageCard label="Completed Calls" value={data?.completed_calls ?? 0} />
                     <UsageCard label="Failed Calls" value={data?.failed_calls ?? 0} />
-                    <UsageCard label="Avg Duration" value={data?.avg_duration_secs ? `${Math.round(data.avg_duration_secs)}s` : '—'} />
+                    <UsageCard
+                        label="Avg Duration"
+                        value={
+                            data?.avg_duration_secs ? `${Math.round(data.avg_duration_secs)}s` : '—'
+                        }
+                    />
                 </div>
             )}
         </div>
@@ -185,8 +195,9 @@ function ProvidersTab() {
             <h2 className="text-sm font-semibold">Provider Configuration</h2>
             <p className="text-sm text-gray-500">
                 Provider settings (LLM endpoint, ASR endpoint, TTS endpoint) are configured via
-                environment variables or <code className="bg-gray-100 px-1 rounded">config.toml</code>.
-                Refer to the deployment documentation for details.
+                environment variables or{' '}
+                <code className="bg-gray-100 px-1 rounded">config.toml</code>. Refer to the
+                deployment documentation for details.
             </p>
             <div className="grid grid-cols-1 gap-3 text-sm">
                 {[
