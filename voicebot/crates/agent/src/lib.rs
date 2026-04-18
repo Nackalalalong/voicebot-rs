@@ -6,4 +6,4 @@ pub mod openai;
 pub mod stub;
 pub mod tool;
 
-pub use metric_tool::tools_from_metrics;
+pub use metric_tool::{tools_from_metrics, tools_from_metrics_with_capture};

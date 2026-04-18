@@ -7,6 +7,7 @@ use common::config::{AppConfig, AsteriskConfig};
 use common::events::{PipelineEvent, SessionConfig};
 use common::types::{AsrProviderType, Language, LlmProviderType, TtsProviderType};
 use futures::StreamExt;
+use async_trait::async_trait;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep_until, Duration, Instant};
@@ -23,6 +24,46 @@ use crate::rtp::{build_pcmu_packet, parse_rtp_payload, pcmu_payload_to_frame};
 const RTP_FRAME_16K_SAMPLES: usize = 320;
 const RTP_TIMESTAMP_STEP: u32 = 160;
 const RTP_PACKET_INTERVAL: Duration = Duration::from_millis(20);
+const CONVERSATION_MEMORY_FIELD: &str = "conversation_memory";
+const CONVERSATION_MEMORY_TTL_SECS: u64 = 3600;
+
+#[derive(Clone)]
+struct RedisConversationMemoryBackend {
+    redis: cache::RedisPool,
+}
+
+impl RedisConversationMemoryBackend {
+    fn new(redis: cache::RedisPool) -> Self {
+        Self { redis }
+    }
+}
+
+#[async_trait]
+impl voicebot_core::agent::memory::ConversationMemoryBackend for RedisConversationMemoryBackend {
+    async fn load(&self, session_id: Uuid) -> Result<Option<Vec<common::types::Message>>, String> {
+        let mut redis = self.redis.clone();
+        cache::session::get_field(&mut redis, session_id, CONVERSATION_MEMORY_FIELD)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn save(&self, session_id: Uuid, messages: &[common::types::Message]) -> Result<(), String> {
+        let mut redis = self.redis.clone();
+        cache::session::set_field(&mut redis, session_id, CONVERSATION_MEMORY_FIELD, &messages)
+            .await
+            .map_err(|error| error.to_string())?;
+        cache::session::extend_ttl(&mut redis, session_id, CONVERSATION_MEMORY_TTL_SECS)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn clear(&self, session_id: Uuid) -> Result<(), String> {
+        let mut redis = self.redis.clone();
+        cache::session::del_field(&mut redis, session_id, CONVERSATION_MEMORY_FIELD)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Call registry — maps caller channel-id → per-session cancel token.
@@ -204,6 +245,10 @@ async fn handle_stasis_start(
 ) -> Result<(), AriError> {
     let channel_id = &channel.id;
     let session_id = Uuid::new_v4();
+    let memory_backend = redis.clone().map(|redis| {
+        Arc::new(RedisConversationMemoryBackend::new(redis))
+            as Arc<dyn voicebot_core::agent::memory::ConversationMemoryBackend>
+    });
 
     // C7: Resolve tenant/campaign from caller's phone number via Redis routing table.
     let mut tenant_id: Option<Uuid> = None;
@@ -278,7 +323,7 @@ async fn handle_stasis_start(
 
     // 7. Start the pipeline session.
     let mut session =
-        match PipelineSession::start_with_config(&app_config, session_config, audio_rx, egress_tx)
+        match PipelineSession::start_with_config_and_memory(&app_config, session_config, audio_rx, egress_tx, memory_backend)
             .await
         {
             Ok(s) => s,
@@ -288,6 +333,19 @@ async fn handle_stasis_start(
                 return Err(AriError::Session(e.to_string()));
             }
         };
+    let reload_handle = match (
+        campaign_id,
+        session.agent_controller(),
+        std::env::var("REDIS_URL").ok(),
+    ) {
+        (Some(campaign_id), Some(controller), Some(redis_url)) => Some(spawn_campaign_reload_task(
+            session_id,
+            campaign_id,
+            controller,
+            redis_url,
+        )),
+        _ => None,
+    };
 
     // 8. Bridge RTP ↔ pipeline until hangup, cancel, or SessionEnd.
     run_bridge(
@@ -300,6 +358,11 @@ async fn handle_stasis_start(
         cancel.clone(),
     )
     .await;
+
+    if let Some(handle) = reload_handle {
+        handle.abort();
+        let _ = handle.await;
+    }
 
     // 9. Tear down.
     session.terminate().await;
@@ -441,4 +504,45 @@ async fn cleanup(
     if let Err(e) = rest.hangup_channel(channel_id).await {
         warn!(channel_id, "failed to hang up channel: {}", e);
     }
+}
+
+fn spawn_campaign_reload_task(
+    session_id: Uuid,
+    campaign_id: Uuid,
+    controller: voicebot_core::session::SessionAgentController,
+    redis_url: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut pubsub = match cache::campaign::subscribe_updates(&redis_url, campaign_id).await {
+            Ok(pubsub) => pubsub,
+            Err(error) => {
+                warn!(%session_id, %campaign_id, error = %error, "failed to subscribe to campaign updates");
+                return;
+            }
+        };
+        let mut messages = pubsub.on_message();
+
+        while let Some(message) = messages.next().await {
+            let payload: String = match message.get_payload() {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(%session_id, %campaign_id, error = %error, "failed to read campaign update payload");
+                    continue;
+                }
+            };
+            let update = match cache::campaign::decode_update(&payload) {
+                Ok(update) => update,
+                Err(error) => {
+                    warn!(%session_id, %campaign_id, error = %error, "failed to decode campaign update payload");
+                    continue;
+                }
+            };
+
+            let tools = voicebot_core::agent::tools_from_metrics(&update.custom_metrics).0;
+            controller
+                .reload_agent_config(Some(update.system_prompt.clone()), tools)
+                .await;
+            info!(%session_id, %campaign_id, status = %update.status, "campaign config hot-reloaded");
+        }
+    })
 }

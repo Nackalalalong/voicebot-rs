@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use agent::core::AgentCore;
+use agent::memory::ConversationMemoryBackend;
 use common::error::{PanicOnProviderError, ProviderFailureHandler};
 use common::events::PipelineEvent;
 use common::traits::{LlmProvider, TtsProvider};
@@ -126,7 +127,71 @@ impl Orchestrator {
         system_prompt: Option<String>,
         tools: Vec<Box<dyn agent::tool::Tool>>,
     ) -> Self {
-        let agent = AgentCore::new(llm.clone(), tools, system_prompt, CancellationToken::new());
+        Self::with_providers_and_tools_and_memory(
+            session_id,
+            event_rx,
+            event_tx,
+            egress_tx,
+            cancel_token,
+            llm,
+            tts,
+            failure_handler,
+            system_prompt,
+            tools,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_providers_and_tools_and_memory(
+        session_id: Uuid,
+        event_rx: Receiver<PipelineEvent>,
+        event_tx: Sender<PipelineEvent>,
+        egress_tx: Sender<PipelineEvent>,
+        cancel_token: CancellationToken,
+        llm: Arc<dyn LlmProvider>,
+        tts: Arc<dyn TtsProvider>,
+        failure_handler: Arc<dyn ProviderFailureHandler>,
+        system_prompt: Option<String>,
+        tools: Vec<Box<dyn agent::tool::Tool>>,
+        memory_backend: Option<Arc<dyn ConversationMemoryBackend>>,
+    ) -> Self {
+        let agent = match memory_backend {
+            Some(memory_backend) => AgentCore::new_with_memory_backend(
+                llm.clone(),
+                tools,
+                system_prompt,
+                CancellationToken::new(),
+                session_id,
+                memory_backend,
+            ),
+            None => AgentCore::new(llm.clone(), tools, system_prompt, CancellationToken::new()),
+        };
+        Self::with_providers_and_agent(
+            session_id,
+            event_rx,
+            event_tx,
+            egress_tx,
+            cancel_token,
+            llm,
+            tts,
+            failure_handler,
+            Arc::new(Mutex::new(agent)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_providers_and_agent(
+        session_id: Uuid,
+        event_rx: Receiver<PipelineEvent>,
+        event_tx: Sender<PipelineEvent>,
+        egress_tx: Sender<PipelineEvent>,
+        cancel_token: CancellationToken,
+        llm: Arc<dyn LlmProvider>,
+        tts: Arc<dyn TtsProvider>,
+        failure_handler: Arc<dyn ProviderFailureHandler>,
+        agent: Arc<Mutex<AgentCore>>,
+    ) -> Self {
         Self {
             state: OrchestratorState::Idle,
             session_id,
@@ -136,7 +201,7 @@ impl Orchestrator {
             cancel_token,
             llm: Some(llm.clone()),
             tts: Some(tts),
-            agent: Some(Arc::new(Mutex::new(agent))),
+            agent: Some(agent),
             agent_handle: None,
             tts_handle: None,
             agent_turn_cancel: None,

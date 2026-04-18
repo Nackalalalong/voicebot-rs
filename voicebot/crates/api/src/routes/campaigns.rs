@@ -16,6 +16,26 @@ use crate::{
     state::AppState,
 };
 
+async fn cache_and_publish_campaign(redis: &cache::RedisPool, campaign: &db::models::Campaign) {
+    let update = cache::campaign::CampaignConfigUpdate {
+        campaign_id: campaign.id,
+        tenant_id: campaign.tenant_id,
+        status: campaign.status.clone(),
+        system_prompt: campaign.system_prompt.clone(),
+        custom_metrics: campaign.custom_metrics.clone(),
+    };
+
+    let mut conn = redis.clone();
+    if let Err(error) = cache::campaign::set_config(&mut conn, campaign.id, campaign).await {
+        tracing::warn!(campaign_id = %campaign.id, error = %error, "failed to refresh campaign cache");
+        return;
+    }
+
+    if let Err(error) = cache::campaign::publish_update(&mut conn, &update).await {
+        tracing::warn!(campaign_id = %campaign.id, error = %error, "failed to publish campaign update");
+    }
+}
+
 pub async fn list_campaigns(
     Extension(user): Extension<AuthUser>,
     State(state): State<Arc<AppState>>,
@@ -75,6 +95,7 @@ pub async fn create_campaign(
         },
     )
     .await?;
+    cache_and_publish_campaign(&state.redis, &campaign).await;
     Ok((StatusCode::CREATED, Json(campaign)))
 }
 
@@ -103,12 +124,14 @@ pub async fn update_campaign_status(
     }
     let valid_statuses = ["draft", "active", "paused", "completed", "archived"];
     if !valid_statuses.contains(&req.status.as_str()) {
-        return Err(ApiError::BadRequest(format!("invalid status: {}", req.status)));
+        return Err(ApiError::BadRequest(format!(
+            "invalid status: {}",
+            req.status
+        )));
     }
-    let campaign = db::queries::campaigns::update_status(&state.db, user.tenant_id, id, &req.status).await?;
-    // Invalidate config cache on status change
-    let mut redis = state.redis.clone();
-    let _ = cache::campaign::invalidate(&mut redis, id).await;
+    let campaign =
+        db::queries::campaigns::update_status(&state.db, user.tenant_id, id, &req.status).await?;
+    cache_and_publish_campaign(&state.redis, &campaign).await;
     Ok(Json(campaign))
 }
 
@@ -127,9 +150,10 @@ pub async fn update_campaign_prompt(
     if !user.is_admin() {
         return Err(ApiError::Forbidden);
     }
-    let campaign = db::queries::campaigns::update_prompt(&state.db, user.tenant_id, id, &req.system_prompt).await?;
-    let mut redis = state.redis.clone();
-    let _ = cache::campaign::invalidate(&mut redis, id).await;
+    let campaign =
+        db::queries::campaigns::update_prompt(&state.db, user.tenant_id, id, &req.system_prompt)
+            .await?;
+    cache_and_publish_campaign(&state.redis, &campaign).await;
     Ok(Json(campaign))
 }
 
@@ -142,6 +166,8 @@ pub async fn delete_campaign(
         return Err(ApiError::Forbidden);
     }
     db::queries::campaigns::delete(&state.db, user.tenant_id, id).await?;
+    let mut redis = state.redis.clone();
+    let _ = cache::campaign::invalidate(&mut redis, id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -153,10 +179,11 @@ pub async fn issue_session_token(
 ) -> ApiResult<Json<serde_json::Value>> {
     // Verify campaign belongs to tenant
     db::queries::campaigns::get_by_id(&state.db, user.tenant_id, id).await?;
-    let token =
-        auth::issue_ws_session_token(&state.jwt_secret, user.user_id, user.tenant_id, id)
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "token": token, "expires_in_secs": 300 })))
+    let token = auth::issue_ws_session_token(&state.jwt_secret, user.user_id, user.tenant_id, id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(
+        serde_json::json!({ "token": token, "expires_in_secs": 300 }),
+    ))
 }
 
 /// GET /campaigns/:id/analytics
@@ -211,8 +238,13 @@ pub async fn update_campaign_metrics(
     if !user.is_admin() {
         return Err(ApiError::Forbidden);
     }
-    let campaign =
-        db::queries::campaigns::update_metrics(&state.db, user.tenant_id, id, req.custom_metrics_config)
-            .await?;
+    let campaign = db::queries::campaigns::update_metrics(
+        &state.db,
+        user.tenant_id,
+        id,
+        req.custom_metrics_config,
+    )
+    .await?;
+    cache_and_publish_campaign(&state.redis, &campaign).await;
     Ok(Json(campaign))
 }

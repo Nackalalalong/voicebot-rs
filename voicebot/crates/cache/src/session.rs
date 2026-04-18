@@ -20,10 +20,7 @@ pub async fn set<T: Serialize>(
     Ok(())
 }
 
-pub async fn get<T: DeserializeOwned>(
-    pool: &mut RedisPool,
-    session_id: Uuid,
-) -> Result<Option<T>> {
+pub async fn get<T: DeserializeOwned>(pool: &mut RedisPool, session_id: Uuid) -> Result<Option<T>> {
     let key = format!("{SESSION_PREFIX}{session_id}");
     let raw: Option<String> = pool.get(&key).await?;
     match raw {
@@ -67,4 +64,10 @@ pub async fn get_field<T: DeserializeOwned>(
         Some(s) => Ok(Some(serde_json::from_str(&s)?)),
         None => Ok(None),
     }
+}
+
+pub async fn del_field(pool: &mut RedisPool, session_id: Uuid, field: &str) -> Result<()> {
+    let key = format!("{SESSION_PREFIX}{session_id}");
+    pool.hdel::<_, _, ()>(&key, field).await?;
+    Ok(())
 }

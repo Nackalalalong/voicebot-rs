@@ -14,10 +14,12 @@ use common::testing::ReceiverAudioStream;
 use common::traits::{AsrProvider, AudioInputStream, LlmProvider, TtsProvider};
 use common::types::{AsrProviderType, Component, LlmProviderType, TtsProviderType};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use agent::core::AgentCore;
 use agent::stub::StubLlmProvider;
 use asr::stub::StubAsrProvider;
 use tts::stub::StubTtsProvider;
@@ -362,6 +364,23 @@ pub struct PipelineSession {
     // Shared with the Orchestrator task so we can read them after it exits.
     turn_count: Arc<AtomicU32>,
     interrupt_count: Arc<AtomicU32>,
+    agent_controller: Option<SessionAgentController>,
+}
+
+#[derive(Clone)]
+pub struct SessionAgentController {
+    agent: Arc<Mutex<AgentCore>>,
+}
+
+impl SessionAgentController {
+    pub async fn reload_agent_config(
+        &self,
+        system_prompt: Option<String>,
+        tools: Vec<Box<dyn agent::tool::Tool>>,
+    ) {
+        let mut agent = self.agent.lock().await;
+        agent.reload_runtime_config(system_prompt, tools).await;
+    }
 }
 
 impl PipelineSession {
@@ -550,7 +569,13 @@ impl PipelineSession {
 
         // Orchestrator: consumes events, triggers agent/TTS, forwards to egress
         let orch_token = cancel_token.child_token();
-        let mut orchestrator = Orchestrator::with_providers(
+        let agent = Arc::new(Mutex::new(AgentCore::new(
+            llm.clone(),
+            vec![],
+            config.system_prompt.clone(),
+            CancellationToken::new(),
+        )));
+        let mut orchestrator = Orchestrator::with_providers_and_agent(
             session_id,
             event_rx,
             event_tx.clone(),
@@ -559,7 +584,7 @@ impl PipelineSession {
             llm,
             tts,
             std::sync::Arc::clone(&failure_handler),
-            config.system_prompt.clone(),
+            Arc::clone(&agent),
         );
         let (turn_count, interrupt_count) = orchestrator.counter_handles();
         handles.push(tokio::spawn(async move {
@@ -579,6 +604,7 @@ impl PipelineSession {
             task_handles: handles,
             turn_count,
             interrupt_count,
+            agent_controller: Some(SessionAgentController { agent }),
         })
     }
 
@@ -603,8 +629,45 @@ impl PipelineSession {
         egress_tx: Sender<PipelineEvent>,
         tools: Vec<Box<dyn agent::tool::Tool>>,
     ) -> Result<Self, SessionError> {
+        Self::start_with_config_and_tools_and_memory(
+            app_config,
+            session_config,
+            audio_rx,
+            egress_tx,
+            tools,
+            None,
+        )
+        .await
+    }
+
+    pub async fn start_with_config_and_memory(
+        app_config: &AppConfig,
+        session_config: SessionConfig,
+        audio_rx: Receiver<AudioFrame>,
+        egress_tx: Sender<PipelineEvent>,
+        memory_backend: Option<std::sync::Arc<dyn agent::memory::ConversationMemoryBackend>>,
+    ) -> Result<Self, SessionError> {
+        Self::start_with_config_and_tools_and_memory(
+            app_config,
+            session_config,
+            audio_rx,
+            egress_tx,
+            vec![],
+            memory_backend,
+        )
+        .await
+    }
+
+    pub async fn start_with_config_and_tools_and_memory(
+        app_config: &AppConfig,
+        session_config: SessionConfig,
+        audio_rx: Receiver<AudioFrame>,
+        egress_tx: Sender<PipelineEvent>,
+        tools: Vec<Box<dyn agent::tool::Tool>>,
+        memory_backend: Option<std::sync::Arc<dyn agent::memory::ConversationMemoryBackend>>,
+    ) -> Result<Self, SessionError> {
         let (asr, llm, tts) = build_providers(app_config, &session_config)?;
-        Self::start_with_handler_and_tools(
+        Self::start_with_handler_and_tools_and_memory(
             session_config,
             audio_rx,
             egress_tx,
@@ -613,13 +676,13 @@ impl PipelineSession {
             tts,
             Arc::new(LogOnProviderError),
             tools,
+            memory_backend,
         )
         .await
     }
 
-    /// Internal: like `start_with_handler` but also wires tools into the AgentCore.
     #[allow(clippy::too_many_arguments)]
-    async fn start_with_handler_and_tools(
+    async fn start_with_handler_and_tools_and_memory(
         config: SessionConfig,
         audio_rx: Receiver<AudioFrame>,
         egress_tx: Sender<PipelineEvent>,
@@ -628,6 +691,7 @@ impl PipelineSession {
         tts: Arc<dyn TtsProvider>,
         failure_handler: Arc<dyn ProviderFailureHandler>,
         tools: Vec<Box<dyn agent::tool::Tool>>,
+        memory_backend: Option<std::sync::Arc<dyn agent::memory::ConversationMemoryBackend>>,
     ) -> Result<Self, SessionError> {
         let cancel_token = CancellationToken::new();
         let session_id = config.session_id;
@@ -741,7 +805,24 @@ impl PipelineSession {
         }));
 
         let orch_token = cancel_token.child_token();
-        let mut orchestrator = Orchestrator::with_providers_and_tools(
+        let agent_core = match memory_backend {
+            Some(memory_backend) => AgentCore::new_with_memory_backend(
+                llm.clone(),
+                tools,
+                config.system_prompt.clone(),
+                CancellationToken::new(),
+                session_id,
+                memory_backend,
+            ),
+            None => AgentCore::new(
+                llm.clone(),
+                tools,
+                config.system_prompt.clone(),
+                CancellationToken::new(),
+            ),
+        };
+        let agent = Arc::new(Mutex::new(agent_core));
+        let mut orchestrator = Orchestrator::with_providers_and_agent(
             session_id,
             event_rx,
             event_tx.clone(),
@@ -750,8 +831,7 @@ impl PipelineSession {
             llm,
             tts,
             Arc::clone(&failure_handler),
-            config.system_prompt.clone(),
-            tools,
+            Arc::clone(&agent),
         );
         let (turn_count, interrupt_count) = orchestrator.counter_handles();
         handles.push(tokio::spawn(async move { orchestrator.run().await }));
@@ -769,6 +849,7 @@ impl PipelineSession {
             task_handles: handles,
             turn_count,
             interrupt_count,
+            agent_controller: Some(SessionAgentController { agent }),
         })
     }
 
@@ -824,6 +905,10 @@ impl PipelineSession {
         };
         info!(session_id = %self.id, turn_count = stats.turn_count, interrupt_count = stats.interrupt_count, "pipeline session terminated");
         stats
+    }
+
+    pub fn agent_controller(&self) -> Option<SessionAgentController> {
+        self.agent_controller.clone()
     }
 }
 

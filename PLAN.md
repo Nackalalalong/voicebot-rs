@@ -20,7 +20,7 @@
 | 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 8 | `OpenAiProvider` SSE streaming, `AgentCore` (max 5 tool iters), `ConversationMemory`, `Tool` trait. Missing: integration test, concrete tool impls |
 | 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM, cancel support, sentence-boundary streaming |
 | 8 | **Integration** — end-to-end with interrupt | ✅ Done | 8 | E2E stub tests, barge-in interrupt, sentence-boundary, ASR interrupt regression |
-| 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16, ARI WS event loop, per-call ephemeral TCP port, DTMF → terminate |
+| 9 | **transport/asterisk** — ARI adapter | 🟡 Partial | 4i | ARI WS event loop, bridge lifecycle, DTMF → terminate. Current runtime path uses RTP externalMedia + `ulaw`; AudioSocket+slin16 path exists in crate but is not the active transport |
 | 10 | **Observability** — metrics, config, fallbacks | ✅ Done | 2 | Prometheus (9 metrics), binary entry point, graceful shutdown, fallback provider wiring |
 | 11 | **loadtest** — virtual phone load harness | ✅ Done | 12+3i | xphone SIP backend, outbound+inbound, campaign scheduler, stutter scoring, per-call artifacts |
 
@@ -29,13 +29,14 @@
 - [ ] Agent: concrete tool impls (at least one working tool)
 - [ ] Agent: integration test with real LLM
 - [ ] FinalTranscript never-drop backpressure test
+- [ ] Asterisk: choose one production media path and finish it end-to-end. Either wire AudioSocket+slin16 as planned, or update the plan/docs/config to bless RTP externalMedia + `ulaw` and prove it with a live-call smoke test
 
 ### Infrastructure
 
 | Component | Status |
 | --- | --- |
 | Speaches server | ✅ `system/speaches/compose.cpu.yaml` |
-| Asterisk ARI | ✅ `system/asterisk/docker-compose.yaml` |
+| Asterisk ARI | 🟡 Compose exists in `system/asterisk/docker-compose.yaml`, but runtime path needs re-validation against the current transport implementation |
 | Web demo | ✅ `system/voicebot-core-demo/` |
 | Monitoring | ✅ `system/monitoring/` (Prometheus + Grafana) |
 
@@ -669,11 +670,11 @@ scheduler → common, db, cache, storage
 | # | Task | Status |
 |---|---|---|
 | C1 | Campaign config resolution: Redis cache → PG fallback on session start | ✅ Done |
-| C2 | Redis-backed ConversationMemory (replace in-memory Vec, with fallback) | ❌ Not done — still in-memory Vec |
+| C2 | Redis-backed ConversationMemory (replace in-memory Vec, with fallback) | ✅ Done |
 | C3 | Concurrent session limit enforcement via Redis SCARD/SADD | ✅ Done |
 | C4 | CDR accumulation during call + async flush to PG on session end | ✅ Done |
 | C5 | Auto-generate agent tools from campaign custom_metrics definitions | ✅ Done |
-| C6 | Campaign config hot-reload via Redis pub/sub | ❌ Not done |
+| C6 | Campaign config hot-reload via Redis pub/sub | ✅ Done |
 | C7 | Phone number → campaign routing table (Redis lookup) | ✅ Done |
 | C8 | WS auth: validate token from query param, extract campaign_id + tenant_id | ✅ Done |
 | C9 | Call recording: configurable audio stream to S3 via multipart upload | ✅ Done (WAV buffer → S3 on session end) |
@@ -719,7 +720,7 @@ scheduler → common, db, cache, storage
 | F3 | Multi-tenant isolation tests: verify tenant A cannot see tenant B's data (app-level + RLS) | ❌ Not done |
 | F4 | Recording E2E: call with recording_enabled → audio in S3 → playback from dashboard | ❌ Not done |
 | F5 | Load test: 50 concurrent sessions across 5 tenants | ❌ Not done |
-| F6 | Docker Compose: full stack (PG + Redis + RustFS + Speaches + Asterisk + API + Core + Scheduler + Dashboard) | ✅ Done |
+| F6 | Docker Compose: full stack (PG + Redis + RustFS + Speaches + Asterisk + API + Core + Scheduler + Dashboard) | 🟡 Partial — compose files exist, but Asterisk/live telephony path needs a working validation pass |
 | F7 | Health check endpoints + readiness probes for all services | ✅ Done |
 | F8 | Usage tracking accuracy test: verify call minutes match actual call durations | ❌ Not done |
 

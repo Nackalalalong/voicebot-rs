@@ -22,3 +22,4 @@ axum = { version = "0.8", features = ["ws"] }
 futures = { workspace = true }
 tokio-util = { workspace = true }
 rubato = { workspace = true }
+async-trait = { workspace = true }

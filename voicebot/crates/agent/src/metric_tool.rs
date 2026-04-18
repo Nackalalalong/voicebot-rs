@@ -115,11 +115,20 @@ pub fn tools_from_metrics(
     Arc<Mutex<serde_json::Map<String, Value>>>,
 ) {
     let captured = Arc::new(Mutex::new(serde_json::Map::new()));
+    let tools = tools_from_metrics_with_capture(custom_metrics, Arc::clone(&captured));
+
+    (tools, captured)
+}
+
+pub fn tools_from_metrics_with_capture(
+    custom_metrics: &Value,
+    captured: Arc<Mutex<serde_json::Map<String, Value>>>,
+) -> Vec<Box<dyn Tool>> {
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
     let metrics = match custom_metrics.as_array() {
         Some(arr) => arr,
-        None => return (tools, captured),
+        None => return tools,
     };
 
     for metric in metrics {
@@ -170,5 +179,5 @@ pub fn tools_from_metrics(
         )));
     }
 
-    (tools, captured)
+    tools
 }

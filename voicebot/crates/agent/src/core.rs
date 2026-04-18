@@ -6,9 +6,10 @@ use common::traits::LlmProvider;
 use common::types::{Message, ToolCall, ToolDefinition};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::error::AgentError;
-use crate::memory::ConversationMemory;
+use crate::memory::{ConversationMemory, ConversationMemoryBackend};
 use crate::tool::Tool;
 
 const MAX_TOOL_ITERATIONS: u32 = 5;
@@ -34,8 +35,25 @@ impl AgentCore {
     ) -> Self {
         let mut memory = ConversationMemory::new(20);
         if let Some(prompt) = system_prompt {
-            memory.push(Message::system(&prompt));
+            memory.push_local(Message::system(&prompt));
         }
+        Self {
+            llm,
+            tools,
+            memory,
+            cancel_token,
+        }
+    }
+
+    pub fn new_with_memory_backend(
+        llm: Arc<dyn LlmProvider>,
+        tools: Vec<Box<dyn Tool>>,
+        system_prompt: Option<String>,
+        cancel_token: CancellationToken,
+        session_id: Uuid,
+        memory_backend: Arc<dyn ConversationMemoryBackend>,
+    ) -> Self {
+        let memory = ConversationMemory::with_backend(20, session_id, system_prompt, memory_backend);
         Self {
             llm,
             tools,
@@ -49,7 +67,7 @@ impl AgentCore {
         transcript: String,
         tx: Sender<PipelineEvent>,
     ) -> Result<(), AgentError> {
-        self.memory.push(Message::user(&transcript));
+        self.memory.push(Message::user(&transcript)).await;
 
         let mut iterations = 0;
 
@@ -65,7 +83,7 @@ impl AgentCore {
 
             // Stream completion from LLM
             let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<PipelineEvent>(20);
-            let messages = self.memory.as_slice().to_vec();
+            let messages = self.memory.snapshot().await;
             let tool_defs = Arc::clone(&tool_defs);
 
             let llm = self.llm.clone();
@@ -108,14 +126,14 @@ impl AgentCore {
 
             if matches!(completion, LlmCompletionOutcome::Cancelled) {
                 if !full_text.trim().is_empty() {
-                    self.memory.push(Message::assistant(&full_text));
+                    self.memory.push(Message::assistant(&full_text)).await;
                 }
                 return Err(AgentError::Cancelled);
             }
 
             // No tool calls = done
             if tool_calls.is_empty() {
-                self.memory.push(Message::assistant(&full_text));
+                self.memory.push(Message::assistant(&full_text)).await;
                 let _ = tx
                     .send(PipelineEvent::AgentFinalResponse {
                         text: full_text,
@@ -127,7 +145,8 @@ impl AgentCore {
 
             // Execute tools
             self.memory
-                .push(Message::assistant_with_tool_calls(&full_text, &tool_calls));
+                .push(Message::assistant_with_tool_calls(&full_text, &tool_calls))
+                .await;
             for tc in &tool_calls {
                 let result =
                     if let Some(tool) = self.tools.iter().find(|t| t.name() == tc.function.name) {
@@ -144,7 +163,7 @@ impl AgentCore {
                     } else {
                         format!("Unknown tool: {}", tc.function.name)
                     };
-                self.memory.push(Message::tool_result(&tc.id, &result));
+                self.memory.push(Message::tool_result(&tc.id, &result)).await;
             }
 
             iterations += 1;
@@ -155,6 +174,15 @@ impl AgentCore {
 
     pub fn memory(&self) -> &ConversationMemory {
         &self.memory
+    }
+
+    pub async fn reload_runtime_config(
+        &mut self,
+        system_prompt: Option<String>,
+        tools: Vec<Box<dyn Tool>>,
+    ) {
+        self.memory.set_system_prompt(system_prompt).await;
+        self.tools = tools;
     }
 
     /// Replace the cancellation token used for the next LLM call.

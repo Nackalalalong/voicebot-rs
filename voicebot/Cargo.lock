@@ -4261,6 +4261,7 @@ dependencies = [
 name = "transport-asterisk"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "cache",
  "common",
  "db",
@@ -4281,6 +4282,7 @@ dependencies = [
 name = "transport-websocket"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "auth",
  "axum 0.8.8",
  "cache",

@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
@@ -25,6 +26,50 @@ use redis::AsyncCommands;
 const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 const PIPELINE_FRAME_SAMPLES: usize = 320;
 const PIPELINE_FRAME_DURATION_MS: u64 = 20;
+const CONVERSATION_MEMORY_FIELD: &str = "conversation_memory";
+const CONVERSATION_MEMORY_TTL_SECS: u64 = 3600;
+
+#[derive(Clone)]
+struct RedisConversationMemoryBackend {
+    redis: cache::RedisPool,
+}
+
+impl RedisConversationMemoryBackend {
+    fn new(redis: cache::RedisPool) -> Self {
+        Self { redis }
+    }
+}
+
+#[async_trait]
+impl voicebot_core::agent::memory::ConversationMemoryBackend for RedisConversationMemoryBackend {
+    async fn load(&self, session_id: Uuid) -> Result<Option<Vec<common::types::Message>>, String> {
+        let mut redis = self.redis.clone();
+        cache::session::get_field(&mut redis, session_id, CONVERSATION_MEMORY_FIELD)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn save(
+        &self,
+        session_id: Uuid,
+        messages: &[common::types::Message],
+    ) -> Result<(), String> {
+        let mut redis = self.redis.clone();
+        cache::session::set_field(&mut redis, session_id, CONVERSATION_MEMORY_FIELD, &messages)
+            .await
+            .map_err(|error| error.to_string())?;
+        cache::session::extend_ttl(&mut redis, session_id, CONVERSATION_MEMORY_TTL_SECS)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn clear(&self, session_id: Uuid) -> Result<(), String> {
+        let mut redis = self.redis.clone();
+        cache::session::del_field(&mut redis, session_id, CONVERSATION_MEMORY_FIELD)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
 
 struct WebSocketSessionStart {
     pipeline_config: SessionConfig,
@@ -382,8 +427,10 @@ async fn handle_connection_platform(
     if let Some(cid) = campaign_id {
         let mut redis = platform.redis.clone();
         // Try Redis cache first
-        let cached: Option<db::models::Campaign> =
-            cache::campaign::get_config(&mut redis, cid).await.ok().flatten();
+        let cached: Option<db::models::Campaign> = cache::campaign::get_config(&mut redis, cid)
+            .await
+            .ok()
+            .flatten();
         let campaign = if let Some(c) = cached {
             Some(c)
         } else {
@@ -437,7 +484,9 @@ async fn handle_connection_platform(
         return; // WS upgrade already happened; transport will close the socket.
     }
 
-    let _ = redis.sadd::<_, _, ()>(&active_key, session_id.to_string()).await;
+    let _ = redis
+        .sadd::<_, _, ()>(&active_key, session_id.to_string())
+        .await;
 
     // Wait for session_start with 10s timeout
     let session_start = match tokio::time::timeout(
@@ -488,9 +537,20 @@ async fn handle_connection_platform(
         tokio::sync::mpsc::channel::<AudioFrame>(channel_config.audio_ingress_capacity);
     let (egress_tx, mut egress_rx) =
         tokio::sync::mpsc::channel::<PipelineEvent>(channel_config.event_bus_capacity);
+    let memory_backend = Some(
+        Arc::new(RedisConversationMemoryBackend::new(platform.redis.clone()))
+            as Arc<dyn voicebot_core::agent::memory::ConversationMemoryBackend>,
+    );
 
-    let session_result =
-        PipelineSession::start_with_config_and_tools(&app_config, session_start.pipeline_config, audio_rx, egress_tx, campaign_tools).await;
+    let session_result = PipelineSession::start_with_config_and_tools_and_memory(
+        &app_config,
+        session_start.pipeline_config,
+        audio_rx,
+        egress_tx,
+        campaign_tools,
+        memory_backend,
+    )
+    .await;
     let mut session = match session_result {
         Ok(s) => s,
         Err(e) => {
@@ -498,6 +558,20 @@ async fn handle_connection_platform(
             cleanup_active_session(&platform.redis, tenant_id, session_id).await;
             return;
         }
+    };
+    let reload_handle = match (
+        campaign_id,
+        session.agent_controller(),
+        std::env::var("REDIS_URL").ok(),
+    ) {
+        (Some(campaign_id), Some(controller), Some(redis_url)) => Some(spawn_campaign_reload_task(
+            session_id,
+            campaign_id,
+            controller,
+            redis_url,
+            Some(std::sync::Arc::clone(&captured_metrics)),
+        )),
+        _ => None,
     };
 
     let session_ready = match serde_json::to_string(&ServerMessage::SessionReady) {
@@ -533,15 +607,25 @@ async fn handle_connection_platform(
     )
     .await;
 
+    if let Some(handle) = reload_handle {
+        handle.abort();
+        let _ = handle.await;
+    }
+
     // Finalize
     let stats = session.terminate().await;
     cleanup_active_session(&platform.redis, tenant_id, session_id).await;
 
     // C9: Upload recording to S3 if enabled
-    let recording_url = if let (Some(samples), Some(storage)) = (recording_samples.as_ref(), platform.storage.as_ref()) {
+    let recording_url = if let (Some(samples), Some(storage)) =
+        (recording_samples.as_ref(), platform.storage.as_ref())
+    {
         if !samples.is_empty() {
             let wav_bytes = encode_pcm_to_wav(samples, PIPELINE_SAMPLE_RATE);
-            let key = storage::StorageClient::recording_key(&tenant_id.to_string(), &session_id.to_string());
+            let key = storage::StorageClient::recording_key(
+                &tenant_id.to_string(),
+                &session_id.to_string(),
+            );
             match storage.upload(&key, wav_bytes, "audio/wav").await {
                 Ok(_) => {
                     tracing::info!(%session_id, %key, "recording uploaded to S3");
@@ -615,13 +699,13 @@ fn encode_pcm_to_wav(samples: &[i16], sample_rate: u32) -> Vec<u8> {
     // fmt chunk
     out.extend_from_slice(b"fmt ");
     out.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-    out.extend_from_slice(&1u16.to_le_bytes());  // PCM
-    out.extend_from_slice(&1u16.to_le_bytes());  // mono
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
     out.extend_from_slice(&sample_rate.to_le_bytes());
     out.extend_from_slice(&byte_rate.to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes());  // block align
+    out.extend_from_slice(&2u16.to_le_bytes()); // block align
     out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-    // data chunk
+                                                 // data chunk
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_bytes.to_le_bytes());
     for s in samples {
@@ -635,6 +719,62 @@ async fn cleanup_active_session(redis: &cache::RedisPool, tenant_id: Uuid, sessi
     let mut conn = redis.clone();
     let key = format!("tenant:{}:active_sessions", tenant_id);
     let _ = conn.srem::<_, _, ()>(&key, session_id.to_string()).await;
+}
+
+fn spawn_campaign_reload_task(
+    session_id: Uuid,
+    campaign_id: Uuid,
+    controller: voicebot_core::session::SessionAgentController,
+    redis_url: String,
+    captured_metrics: Option<
+        std::sync::Arc<tokio::sync::Mutex<serde_json::Map<String, serde_json::Value>>>,
+    >,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut pubsub = match cache::campaign::subscribe_updates(&redis_url, campaign_id).await {
+            Ok(pubsub) => pubsub,
+            Err(error) => {
+                tracing::warn!(%session_id, %campaign_id, error = %error, "failed to subscribe to campaign updates");
+                return;
+            }
+        };
+        let mut messages = pubsub.on_message();
+
+        while let Some(message) = messages.next().await {
+            let payload: String = match message.get_payload() {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::warn!(%session_id, %campaign_id, error = %error, "failed to read campaign update payload");
+                    continue;
+                }
+            };
+            let update = match cache::campaign::decode_update(&payload) {
+                Ok(update) => update,
+                Err(error) => {
+                    tracing::warn!(%session_id, %campaign_id, error = %error, "failed to decode campaign update payload");
+                    continue;
+                }
+            };
+
+            let tools = match &captured_metrics {
+                Some(captured_metrics) => voicebot_core::agent::tools_from_metrics_with_capture(
+                    &update.custom_metrics,
+                    std::sync::Arc::clone(captured_metrics),
+                ),
+                None => voicebot_core::agent::tools_from_metrics(&update.custom_metrics).0,
+            };
+            controller
+                .reload_agent_config(Some(update.system_prompt.clone()), tools)
+                .await;
+
+            tracing::info!(
+                %session_id,
+                %campaign_id,
+                status = %update.status,
+                "campaign config hot-reloaded"
+            );
+        }
+    })
 }
 
 /// Read WS text frames until we receive a valid `session_start` message.
