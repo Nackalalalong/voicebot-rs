@@ -12,6 +12,12 @@ members = [
     "crates/transport/websocket",
     "crates/transport/asterisk",
     "crates/server",
+    "crates/db",
+    "crates/cache",
+    "crates/auth",
+    "crates/storage",
+    "crates/api",
+    "crates/scheduler",
 ]
 
 [workspace.dependencies]
@@ -27,4 +33,40 @@ futures = "0.3"
 async-trait = "0.1"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
-rubato = { version = "2", default-features = false, features = ["fft_resampler"] }
+rubato = { version = "2", default-features = false, features = [
+    "fft_resampler",
+] }
+# Data layer
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "tls-rustls-ring",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+    "migrate",
+] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+chrono = { version = "0.4", features = ["serde"] }
+# Auth
+jsonwebtoken = "9"
+argon2 = "0.5"
+# Storage
+aws-sdk-s3 = "1"
+aws-config = "1"
+aws-credential-types = "1"
+# API framework
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
+# Scheduler
+apalis = { version = "0.6", features = [
+    "limit",
+    "retry",
+    "timeout",
+    "catch-panic",
+] }
+apalis-sql = { version = "0.6", features = ["postgres"] }

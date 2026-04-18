@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use common::config::load_config;
+use transport_websocket::handler::PlatformContext;
 use voicebot_core::observability::{init_metrics, init_tracing};
 
 #[tokio::main]
@@ -35,10 +38,10 @@ async fn main() {
 
     // Start ARI transport if configured.
     let asterisk_config = config.asterisk.clone();
-    let config_arc = std::sync::Arc::new(config);
+    let config_arc = Arc::new(config);
 
     if let Some(ari_cfg) = asterisk_config {
-        let app_config = std::sync::Arc::clone(&config_arc);
+        let app_config = Arc::clone(&config_arc);
         tokio::spawn(async move {
             tracing::info!(
                 ari_host = %ari_cfg.ari_host,
@@ -52,8 +55,18 @@ async fn main() {
         });
     }
 
-    // Build the WebSocket router with real providers from config
-    let app = transport_websocket::handler::router_with_config(config_arc);
+    // Optionally connect to DB + Redis for platform features (JWT auth, CDR, session tracking).
+    // Falls back to config-only mode when env vars are absent.
+    let app = match build_platform_context(Arc::clone(&config_arc)).await {
+        Some(platform) => {
+            tracing::info!("platform context ready — using authenticated router");
+            transport_websocket::handler::router_with_platform(config_arc, Arc::new(platform))
+        }
+        None => {
+            tracing::info!("no platform credentials — using unauthenticated router");
+            transport_websocket::handler::router_with_config(config_arc)
+        }
+    };
 
     let listener = match tokio::net::TcpListener::bind(&listen_addr).await {
         Ok(l) => l,
@@ -85,4 +98,30 @@ async fn main() {
         .expect("server error");
 
     tracing::info!("voicebot server stopped");
+}
+
+/// Attempt to connect to DB and Redis using env vars.
+/// Returns None if DATABASE_URL, REDIS_URL, or JWT_SECRET are not set.
+async fn build_platform_context(config: Arc<common::config::AppConfig>) -> Option<PlatformContext> {
+    let database_url = std::env::var("DATABASE_URL").ok()?;
+    let redis_url = std::env::var("REDIS_URL").ok()?;
+    let jwt_secret = std::env::var("JWT_SECRET").ok()?;
+
+    let db = match db::connect(&database_url).await {
+        Ok(pool) => pool,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to connect to DB — disabling platform features");
+            return None;
+        }
+    };
+
+    let redis = match cache::connect(&redis_url).await {
+        Ok(pool) => pool,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to connect to Redis — disabling platform features");
+            return None;
+        }
+    };
+
+    Some(PlatformContext { config, db, redis, jwt_secret })
 }

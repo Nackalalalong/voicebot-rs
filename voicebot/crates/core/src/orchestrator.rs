@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use agent::core::AgentCore;
@@ -49,6 +50,10 @@ pub struct Orchestrator {
     // Sentence-boundary TTS: accumulates partial text and sends complete sentences
     tts_text_tx: Option<Sender<String>>,
     sentence_buffer: String,
+
+    // Session statistics — shared with PipelineSession via Arc<AtomicU32>
+    turn_count: Arc<AtomicU32>,
+    interrupt_count: Arc<AtomicU32>,
 }
 
 impl Orchestrator {
@@ -76,6 +81,8 @@ impl Orchestrator {
             tts_text_tx: None,
             sentence_buffer: String::new(),
             failure_handler: Arc::new(PanicOnProviderError),
+            turn_count: Arc::new(AtomicU32::new(0)),
+            interrupt_count: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -109,11 +116,19 @@ impl Orchestrator {
             tts_text_tx: None,
             sentence_buffer: String::new(),
             failure_handler,
+            turn_count: Arc::new(AtomicU32::new(0)),
+            interrupt_count: Arc::new(AtomicU32::new(0)),
         }
     }
 
     pub fn state(&self) -> OrchestratorState {
         self.state
+    }
+
+    /// Return clones of the atomic counters so the session can read them after
+    /// the orchestrator task completes.
+    pub fn counter_handles(&self) -> (Arc<AtomicU32>, Arc<AtomicU32>) {
+        (Arc::clone(&self.turn_count), Arc::clone(&self.interrupt_count))
     }
 
     pub async fn run(&mut self) {
@@ -181,6 +196,7 @@ impl Orchestrator {
             (OrchestratorState::Transcribing, PipelineEvent::FinalTranscript { ref text, .. }) => {
                 let transcript = text.clone();
                 self.state = OrchestratorState::AgentThinking;
+                self.turn_count.fetch_add(1, Ordering::Relaxed);
                 let _ = self.egress_tx.send(event).await;
                 self.trigger_agent(transcript);
                 return;
@@ -188,6 +204,7 @@ impl Orchestrator {
             (OrchestratorState::Transcribing, PipelineEvent::SpeechStarted { .. }) => {
                 info!(session_id = %self.session_id, "barge-in during transcription, cancelling previous ASR turn");
                 self.cancel_active_tasks().await;
+                self.interrupt_count.fetch_add(1, Ordering::Relaxed);
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
                 let _ = self.egress_tx.send(event).await;
@@ -250,6 +267,7 @@ impl Orchestrator {
             (OrchestratorState::AgentThinking, PipelineEvent::SpeechStarted { .. }) => {
                 info!(session_id = %self.session_id, "barge-in during agent thinking, interrupting LLM");
                 self.cancel_active_tasks().await;
+                self.interrupt_count.fetch_add(1, Ordering::Relaxed);
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
                 let _ = self.egress_tx.send(event).await;
@@ -260,6 +278,7 @@ impl Orchestrator {
             (OrchestratorState::Speaking, PipelineEvent::SpeechStarted { .. }) => {
                 info!(session_id = %self.session_id, "barge-in during speaking, interrupting TTS");
                 self.cancel_active_tasks().await;
+                self.interrupt_count.fetch_add(1, Ordering::Relaxed);
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Listening;
                 let _ = self.egress_tx.send(event).await;
@@ -270,6 +289,7 @@ impl Orchestrator {
             (OrchestratorState::Speaking, PipelineEvent::Interrupt) => {
                 info!(session_id = %self.session_id, "interrupt during speaking, returning to Idle");
                 self.cancel_active_tasks().await;
+                self.interrupt_count.fetch_add(1, Ordering::Relaxed);
                 crate::observability::record_interrupt();
                 self.state = OrchestratorState::Idle;
                 return;

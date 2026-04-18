@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 common = { path = "../../common" }
 voicebot-core = { path = "../../core" }
+auth = { path = "../../auth" }
+cache = { path = "../../cache" }
+db = { path = "../../db" }
+redis = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }

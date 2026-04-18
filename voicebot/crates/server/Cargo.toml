@@ -12,6 +12,9 @@ common = { path = "../common" }
 voicebot-core = { path = "../core" }
 transport-websocket = { path = "../transport/websocket" }
 transport-asterisk = { path = "../transport/asterisk" }
+cache = { path = "../cache" }
+auth = { path = "../auth" }
+db = { path = "../db" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }

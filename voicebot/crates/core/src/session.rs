@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,7 @@ use vad::component::VadComponent;
 
 use crate::error::SessionError;
 use crate::orchestrator::Orchestrator;
+use crate::stats::SessionStats;
 
 struct BufferedAudioStream {
     frames: VecDeque<AudioFrame>,
@@ -352,9 +354,14 @@ pub enum SessionState {
 pub struct PipelineSession {
     pub id: Uuid,
     pub state: SessionState,
+    pub tenant_id: Option<Uuid>,
+    pub campaign_id: Option<Uuid>,
     started_at: Instant,
     cancel_token: CancellationToken,
     task_handles: Vec<tokio::task::JoinHandle<()>>,
+    // Shared with the Orchestrator task so we can read them after it exits.
+    turn_count: Arc<AtomicU32>,
+    interrupt_count: Arc<AtomicU32>,
 }
 
 impl PipelineSession {
@@ -554,6 +561,7 @@ impl PipelineSession {
             std::sync::Arc::clone(&failure_handler),
             config.system_prompt.clone(),
         );
+        let (turn_count, interrupt_count) = orchestrator.counter_handles();
         handles.push(tokio::spawn(async move {
             orchestrator.run().await;
         }));
@@ -564,9 +572,13 @@ impl PipelineSession {
         Ok(Self {
             id: session_id,
             state: SessionState::Active,
+            tenant_id: config.tenant_id,
+            campaign_id: config.campaign_id,
             started_at: Instant::now(),
             cancel_token,
             task_handles: handles,
+            turn_count,
+            interrupt_count,
         })
     }
 
@@ -593,9 +605,18 @@ impl PipelineSession {
         Self::start(session_config, audio_rx, egress_tx, asr, llm, tts).await
     }
 
-    pub async fn terminate(&mut self) {
+    pub async fn terminate(&mut self) -> SessionStats {
+        let ended_at = Instant::now();
         if self.state == SessionState::Terminated {
-            return;
+            return SessionStats {
+                session_id: self.id,
+                tenant_id: self.tenant_id,
+                campaign_id: self.campaign_id,
+                started_at: self.started_at,
+                ended_at,
+                turn_count: self.turn_count.load(Ordering::Relaxed),
+                interrupt_count: self.interrupt_count.load(Ordering::Relaxed),
+            };
         }
         self.state = SessionState::Terminating;
 
@@ -611,8 +632,20 @@ impl PipelineSession {
         }
 
         self.state = SessionState::Terminated;
-        crate::observability::session_ended(self.started_at.elapsed().as_secs_f64() * 1000.0);
-        info!(session_id = %self.id, "pipeline session terminated");
+        let elapsed_ms = self.started_at.elapsed().as_secs_f64() * 1000.0;
+        crate::observability::session_ended(elapsed_ms);
+        let ended_at = Instant::now();
+        let stats = SessionStats {
+            session_id: self.id,
+            tenant_id: self.tenant_id,
+            campaign_id: self.campaign_id,
+            started_at: self.started_at,
+            ended_at,
+            turn_count: self.turn_count.load(Ordering::Relaxed),
+            interrupt_count: self.interrupt_count.load(Ordering::Relaxed),
+        };
+        info!(session_id = %self.id, turn_count = stats.turn_count, interrupt_count = stats.interrupt_count, "pipeline session terminated");
+        stats
     }
 }
 

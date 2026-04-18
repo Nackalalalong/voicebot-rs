@@ -1,5 +1,5 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
@@ -10,12 +10,17 @@ use common::types::{AsrProviderType, Language, LlmProviderType, TtsProviderType}
 use futures::{SinkExt, StreamExt};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 use voicebot_core::session::PipelineSession;
 
 use crate::error::TransportError;
 use crate::protocol::{parse_client_message, ClientMessage, ServerMessage};
+
+// Needed for .sadd()/.srem() on ConnectionManager (redis async commands trait)
+#[allow(unused_imports)]
+use redis::AsyncCommands;
 
 const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 const PIPELINE_FRAME_SAMPLES: usize = 320;
@@ -179,6 +184,26 @@ pub fn router_with_config(config: Arc<AppConfig>) -> Router {
         .with_state(config)
 }
 
+/// Platform context — optional DB, Redis, and JWT for the authenticated path.
+/// Cloned cheaply: PgPool and RedisPool are internally Arc-wrapped.
+#[derive(Clone)]
+pub struct PlatformContext {
+    pub config: Arc<AppConfig>,
+    pub db: db::PgPool,
+    pub redis: cache::RedisPool,
+    pub jwt_secret: String,
+}
+
+/// State tuple used by the platform-aware Axum handler.
+type PlatformState = (Arc<AppConfig>, Arc<PlatformContext>);
+
+/// Build the Axum router with full platform support (JWT auth, CDR, Redis tracking).
+pub fn router_with_platform(config: Arc<AppConfig>, platform: Arc<PlatformContext>) -> Router {
+    Router::new()
+        .route("/session", get(ws_handler_platform))
+        .with_state((config, platform))
+}
+
 /// Axum handler using stub providers (for testing).
 async fn ws_handler_stubs(ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_connection(socket, None))
@@ -190,6 +215,39 @@ async fn ws_handler_configured(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_connection(socket, Some(config)))
+}
+
+/// Axum handler with platform support: JWT auth, campaign resolution, CDR, Redis tracking.
+async fn ws_handler_platform(
+    State((config, platform)): State<PlatformState>,
+    Query(params): Query<HashMap<String, String>>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    // Extract and validate JWT from ?token=
+    let token = params.get("token").cloned().unwrap_or_default();
+    let claims = match auth::validate_token(&platform.jwt_secret, &token) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "ws_handler_platform: JWT validation failed");
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+    let tenant_id = match claims.tenant_id() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = %e, "ws_handler_platform: invalid tenant_id in claims");
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+
+    // Optional campaign_id from query string
+    let campaign_id = params
+        .get("campaign_id")
+        .and_then(|s| Uuid::parse_str(s).ok());
+
+    ws.on_upgrade(move |socket| {
+        handle_connection_platform(socket, config, platform, tenant_id, campaign_id)
+    })
 }
 
 /// Main connection handler. Manages the full lifecycle of a single session:
@@ -296,6 +354,177 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
     tracing::info!(%session_id, "WebSocket session ended");
 }
 
+/// Platform connection handler: JWT-authenticated, campaign-aware, CDR-tracked.
+async fn handle_connection_platform(
+    ws: WebSocket,
+    app_config: Arc<AppConfig>,
+    platform: Arc<PlatformContext>,
+    tenant_id: Uuid,
+    campaign_id: Option<Uuid>,
+) {
+    let session_id = Uuid::new_v4();
+    tracing::info!(%session_id, %tenant_id, ?campaign_id, "new platform WebSocket connection");
+
+    let (mut ws_sink, mut ws_stream) = ws.split();
+    let vad_config = app_config.vad.clone();
+    let channel_config = app_config.channels.clone();
+
+    // Resolve campaign config: Redis → PG fallback
+    let mut session_system_prompt: Option<String> = None;
+    let mut session_asr: Option<AsrProviderType> = None;
+    let mut session_tts: Option<TtsProviderType> = None;
+
+    if let Some(cid) = campaign_id {
+        let mut redis = platform.redis.clone();
+        // Try Redis cache first
+        let cached: Option<db::models::Campaign> =
+            cache::campaign::get_config(&mut redis, cid).await.ok().flatten();
+        let campaign = if let Some(c) = cached {
+            Some(c)
+        } else {
+            // Cache miss — fetch from PG
+            match db::queries::campaigns::get_by_id(&platform.db, tenant_id, cid).await {
+                Ok(c) => {
+                    // Back-fill the cache (best-effort)
+                    let _ = cache::campaign::set_config(&mut redis, cid, &c).await;
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::warn!(%session_id, %cid, error = %e, "campaign not found, proceeding without campaign config");
+                    None
+                }
+            }
+        };
+        if let Some(c) = campaign {
+            session_system_prompt = Some(c.system_prompt);
+            session_asr = Some(AsrProviderType::from_str_loose(&c.asr_provider));
+            session_tts = Some(TtsProviderType::from_str_loose(&c.tts_provider));
+        }
+    }
+
+    // Track active session in Redis
+    let mut redis = platform.redis.clone();
+    let active_key = format!("tenant:{}:active_sessions", tenant_id);
+    let _ = redis.sadd::<_, _, ()>(&active_key, session_id.to_string()).await;
+
+    // Wait for session_start with 10s timeout
+    let session_start = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        wait_for_session_start(&mut ws_stream, session_id, vad_config),
+    )
+    .await
+    {
+        Ok(Ok(mut s)) => {
+            // Apply campaign overrides
+            s.pipeline_config.tenant_id = Some(tenant_id);
+            s.pipeline_config.campaign_id = campaign_id;
+            if let Some(prompt) = session_system_prompt {
+                s.pipeline_config.system_prompt = Some(prompt);
+            }
+            if let Some(asr) = session_asr {
+                s.pipeline_config.asr_provider = asr;
+            }
+            if let Some(tts) = session_tts {
+                s.pipeline_config.tts_provider = tts;
+            }
+            s
+        }
+        Ok(Err(e)) => {
+            tracing::error!(%session_id, "invalid session_start: {}", e);
+            cleanup_active_session(&platform.redis, tenant_id, session_id).await;
+            return;
+        }
+        Err(_) => {
+            tracing::error!(%session_id, "session_start timeout");
+            cleanup_active_session(&platform.redis, tenant_id, session_id).await;
+            return;
+        }
+    };
+
+    // Create CDR in DB
+    let cdr_req = db::queries::call_records::CreateCallRecord {
+        tenant_id,
+        campaign_id,
+        contact_id: None,
+        session_id: &session_id.to_string(),
+        direction: "inbound",
+        phone_number: "websocket",
+    };
+    let _ = db::queries::call_records::create(&platform.db, cdr_req).await;
+
+    let (audio_tx, audio_rx) =
+        tokio::sync::mpsc::channel::<AudioFrame>(channel_config.audio_ingress_capacity);
+    let (egress_tx, mut egress_rx) =
+        tokio::sync::mpsc::channel::<PipelineEvent>(channel_config.event_bus_capacity);
+
+    let session_result =
+        PipelineSession::start_with_config(&app_config, session_start.pipeline_config, audio_rx, egress_tx).await;
+    let mut session = match session_result {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(%session_id, "failed to start session: {}", e);
+            cleanup_active_session(&platform.redis, tenant_id, session_id).await;
+            return;
+        }
+    };
+
+    let session_ready = match serde_json::to_string(&ServerMessage::SessionReady) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::error!(%session_id, %error, "failed to encode session_ready");
+            session.terminate().await;
+            cleanup_active_session(&platform.redis, tenant_id, session_id).await;
+            return;
+        }
+    };
+    if let Err(error) = ws_sink.send(Message::Text(session_ready.into())).await {
+        tracing::error!(%session_id, %error, "failed to send session_ready");
+        session.terminate().await;
+        cleanup_active_session(&platform.redis, tenant_id, session_id).await;
+        return;
+    }
+
+    run_ws_bridge(
+        session_id,
+        session_start.input_sample_rate,
+        &audio_tx,
+        &mut egress_rx,
+        &mut ws_sink,
+        &mut ws_stream,
+    )
+    .await;
+
+    // Finalize
+    let stats = session.terminate().await;
+    cleanup_active_session(&platform.redis, tenant_id, session_id).await;
+
+    // Finalize CDR
+    let custom_metrics = serde_json::json!({
+        "turn_count": stats.turn_count,
+        "interrupt_count": stats.interrupt_count,
+    });
+    let _ = db::queries::call_records::finalize(
+        &platform.db,
+        tenant_id,
+        &session_id.to_string(),
+        "completed",
+        Some(stats.duration_secs() as i32),
+        None,
+        None,
+        custom_metrics,
+    )
+    .await;
+
+    tracing::info!(%session_id, "platform WebSocket session ended");
+}
+
+/// Remove a session from the tenant's active-session set in Redis.
+async fn cleanup_active_session(redis: &cache::RedisPool, tenant_id: Uuid, session_id: Uuid) {
+    let mut conn = redis.clone();
+    let key = format!("tenant:{}:active_sessions", tenant_id);
+    let _ = conn.srem::<_, _, ()>(&key, session_id.to_string()).await;
+}
+
 /// Read WS text frames until we receive a valid `session_start` message.
 /// Returns the parsed `SessionConfig`. Caller is responsible for the timeout.
 async fn wait_for_session_start(
@@ -334,6 +563,8 @@ async fn wait_for_session_start(
                             llm_provider: LlmProviderType::OpenAi,
                             vad_config,
                             system_prompt: None,
+                            tenant_id: None,
+                            campaign_id: None,
                         },
                         input_sample_rate,
                     });

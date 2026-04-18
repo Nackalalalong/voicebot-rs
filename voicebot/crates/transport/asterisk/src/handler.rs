@@ -225,6 +225,8 @@ async fn handle_stasis_start(
         llm_provider: LlmProviderType::from_str_loose(&defaults.llm_provider),
         vad_config: app_config.vad.clone(),
         system_prompt: None,
+        tenant_id: None,
+        campaign_id: None,
     };
 
     // 7. Start the pipeline session.

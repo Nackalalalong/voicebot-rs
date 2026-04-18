@@ -37,6 +37,10 @@ pub struct SessionConfig {
     pub vad_config: VadConfig,
     /// Optional system prompt sent to the LLM at the start of every session.
     pub system_prompt: Option<String>,
+    /// Tenant that owns this session (populated when platform services are wired).
+    pub tenant_id: Option<Uuid>,
+    /// Campaign driving this session (populated when platform services are wired).
+    pub campaign_id: Option<Uuid>,
 }
 
 /// All pipeline events flowing through the system.
