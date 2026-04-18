@@ -23,6 +23,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     // Public routes (no auth)
     let public = Router::new()
+        .route("/auth/register", post(routes::auth::register))
         .route("/auth/login", post(routes::auth::login))
         .route("/auth/refresh", post(routes::auth::refresh))
         .route("/healthz", get(healthz));
@@ -58,6 +59,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/calls", get(routes::calls::list_calls))
         .route("/calls/:id", get(routes::calls::get_call))
         .route("/calls/:id/recording", get(routes::calls::get_recording_url))
+        // Usage
+        .route("/usage", get(routes::tenants::get_usage))
         // Phone numbers
         .route("/phone-numbers", get(routes::phone_numbers::list_phone_numbers))
         .route("/phone-numbers", post(routes::phone_numbers::provision_phone_number))

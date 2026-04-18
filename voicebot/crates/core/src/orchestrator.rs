@@ -128,7 +128,10 @@ impl Orchestrator {
     /// Return clones of the atomic counters so the session can read them after
     /// the orchestrator task completes.
     pub fn counter_handles(&self) -> (Arc<AtomicU32>, Arc<AtomicU32>) {
-        (Arc::clone(&self.turn_count), Arc::clone(&self.interrupt_count))
+        (
+            Arc::clone(&self.turn_count),
+            Arc::clone(&self.interrupt_count),
+        )
     }
 
     pub async fn run(&mut self) {

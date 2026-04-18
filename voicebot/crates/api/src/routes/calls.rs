@@ -11,7 +11,7 @@ use auth::AuthUser;
 
 use crate::{
     error::ApiResult,
-    pagination::{Page, PaginationParams},
+    pagination::PaginationParams,
     state::AppState,
 };
 

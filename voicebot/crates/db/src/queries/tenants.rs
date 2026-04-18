@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{DbError, Result},
-    models::Tenant,
+    models::{Tenant, User},
 };
 
 pub async fn create(pool: &PgPool, name: &str, slug: &str, plan: &str) -> Result<Tenant> {
@@ -26,6 +26,59 @@ pub async fn create(pool: &PgPool, name: &str, slug: &str, plan: &str) -> Result
         e => DbError::Sqlx(e),
     })?;
     Ok(tenant)
+}
+
+/// Create a tenant and its first owner user in a single transaction.
+pub async fn create_with_owner(
+    pool: &PgPool,
+    org_name: &str,
+    org_slug: &str,
+    email: &str,
+    password_hash: &str,
+    display_name: &str,
+) -> Result<(Tenant, User)> {
+    let mut tx = pool.begin().await?;
+
+    let tenant = sqlx::query_as::<_, Tenant>(
+        r#"
+        INSERT INTO tenants (id, name, slug, plan, is_active, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, 'starter', true, now(), now())
+        RETURNING *
+        "#,
+    )
+    .bind(org_name)
+    .bind(org_slug)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| match e {
+        sqlx::Error::Database(ref db_err) if db_err.is_unique_violation() => {
+            DbError::Duplicate(format!("organisation slug '{org_slug}' already exists"))
+        }
+        e => DbError::Sqlx(e),
+    })?;
+
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        INSERT INTO users (id, tenant_id, email, password_hash, display_name, role, is_active, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, $4, 'owner', true, now(), now())
+        RETURNING *
+        "#,
+    )
+    .bind(tenant.id)
+    .bind(email)
+    .bind(password_hash)
+    .bind(display_name)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| match e {
+        sqlx::Error::Database(ref db_err) if db_err.is_unique_violation() => {
+            DbError::Duplicate(format!("email '{email}' already registered"))
+        }
+        e => DbError::Sqlx(e),
+    })?;
+
+    tx.commit().await?;
+    Ok((tenant, user))
 }
 
 pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Tenant> {

@@ -6,6 +6,64 @@ use serde::{Deserialize, Serialize};
 use crate::{error::ApiResult, state::AppState};
 
 #[derive(Deserialize)]
+pub struct RegisterRequest {
+    pub org_name: String,
+    pub org_slug: String,
+    pub email: String,
+    pub password: String,
+    pub display_name: String,
+}
+
+#[derive(Serialize)]
+pub struct RegisterResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub user: UserInfo,
+}
+
+pub async fn register(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterRequest>,
+) -> ApiResult<(StatusCode, Json<RegisterResponse>)> {
+    // Validate slug format: lowercase alphanumeric + hyphens
+    if !req.org_slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(crate::error::ApiError::BadRequest(
+            "slug must be lowercase alphanumeric with hyphens only".into(),
+        ));
+    }
+
+    let hash = auth::hash_password(&req.password)
+        .await
+        .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
+
+    // Create tenant + owner user atomically
+    let (tenant, user) =
+        db::queries::tenants::create_with_owner(&state.db, &req.org_name, &req.org_slug, &req.email, &hash, &req.display_name)
+            .await
+            .map_err(crate::error::ApiError::from)?;
+
+    let access_token = auth::issue_access_token(&state.jwt_secret, user.id, tenant.id, &user.email, &user.role)
+        .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
+    let refresh_token = auth::issue_refresh_token(&state.jwt_secret, user.id, tenant.id, &user.email, &user.role)
+        .map_err(|e| crate::error::ApiError::Internal(e.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterResponse {
+            access_token,
+            refresh_token,
+            user: UserInfo {
+                id: user.id.to_string(),
+                email: user.email,
+                display_name: user.display_name,
+                role: user.role,
+                tenant_id: tenant.id.to_string(),
+            },
+        }),
+    ))
+}
+
+#[derive(Deserialize)]
 pub struct LoginRequest {
     pub tenant_slug: String,
     pub email: String,

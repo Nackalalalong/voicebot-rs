@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use chrono::{Duration, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -81,4 +82,22 @@ pub async fn delete_tenant(
     }
     db::queries::tenants::deactivate(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct UsageQuery {
+    /// Number of days to look back (default 30)
+    pub days: Option<i64>,
+}
+
+pub async fn get_usage(
+    Extension(user): Extension<AuthUser>,
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<UsageQuery>,
+) -> ApiResult<Json<db::queries::usage::UsageSummary>> {
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    let to = Utc::now();
+    let from = to - Duration::days(days);
+    let summary = db::queries::usage::aggregate(&state.db, user.tenant_id, from, to).await?;
+    Ok(Json(summary))
 }

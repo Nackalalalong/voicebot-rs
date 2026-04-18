@@ -12,7 +12,6 @@ use auth::AuthUser;
 
 use crate::{
     error::{ApiError, ApiResult},
-    pagination::{Page, PaginationParams},
     state::AppState,
 };
 
