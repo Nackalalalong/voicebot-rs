@@ -15,6 +15,7 @@ path = "src/lib.rs"
 db = { path = "../db" }
 cache = { path = "../cache" }
 storage = { path = "../storage" }
+redis = { workspace = true }
 apalis = { workspace = true }
 apalis-sql = { workspace = true }
 serde = { workspace = true }

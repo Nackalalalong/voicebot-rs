@@ -3288,6 +3288,7 @@ dependencies = [
  "cache",
  "chrono",
  "db",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",

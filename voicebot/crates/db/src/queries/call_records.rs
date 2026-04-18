@@ -152,3 +152,23 @@ pub async fn set_sentiment(
     .await?;
     Ok(())
 }
+
+/// Update post-call analysis fields (sentiment + custom_metrics) atomically.
+pub async fn set_analysis(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    id: Uuid,
+    sentiment: &str,
+    custom_metrics: serde_json::Value,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE call_records SET sentiment = $1, custom_metrics = $2 WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(sentiment)
+    .bind(custom_metrics)
+    .bind(id)
+    .bind(tenant_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

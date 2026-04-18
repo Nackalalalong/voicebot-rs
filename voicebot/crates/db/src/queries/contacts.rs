@@ -189,3 +189,23 @@ pub async fn mark_failed_retry(
     .await?;
     Ok(())
 }
+
+/// Count contacts not yet in a terminal state for campaign completion detection.
+pub async fn count_active(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    campaign_id: Uuid,
+) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM contacts
+        WHERE tenant_id = $1 AND campaign_id = $2
+          AND status NOT IN ('completed', 'failed', 'do_not_call')
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(campaign_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
