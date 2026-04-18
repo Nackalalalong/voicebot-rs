@@ -1,634 +1,782 @@
 # PLAN — voicebot-rs
 
-> 89 tests passing + 16 ignored integration tests · 10 crates implemented · Milestones 1–5 and 7–11 complete, 6 partial
+> Production telephony platform: multi-tenant, campaign-driven, horizontally scalable.
 
 ---
 
-## Milestone Status
+## Part 1 — Voice Engine (Complete)
+
+> 89 tests passing + 16 ignored integration tests · 10 crates implemented
+
+### Milestone Status
 
 | # | Milestone | Status | Tests | Notes |
 | --- | --- | --- | --: | --- |
 | 1 | **common** — types, traits, errors, config, retry | ✅ Done | 19 | `AudioFrame`, `PipelineEvent`, provider traits, `SessionConfig`, env-var substitution, `with_retry`, `TestAudioStream` |
-| 2 | **vad** — energy-threshold VAD + Speaches | ✅ Done | 14 | `rms_energy`, `is_voiced`, `FrameChunker`, `VadComponent` state machine, `SpeachesVadClient` batch VAD via `/v1/audio/speech/timestamps` |
-| 3 | **core** — orchestrator + session + stubs | ✅ Done | 13+2i | `Orchestrator` with provider triggering, sentence-boundary TTS streaming, cooperative barge-in cancellation for ASR/LLM/TTS, partial assistant history retention on LLM interrupt, `PipelineSession` with per-utterance ASR fanout, 7 integration tests (3 E2E), `build_providers()` factory, `start_with_config()`. 2 ignored Speaches tests |
-| 4 | **transport/websocket** — WS server + protocol | ✅ Done | 6 | Axum handler, dual router (`router()` stubs, `router_with_config()` real), `ClientMessage`/`ServerMessage` JSON, bidirectional bridge |
-| 5 | **asr** — Speaches OpenAI-compatible provider | ✅ Done | 2+3i | `SpeachesAsrProvider` multipart POST to `/v1/audio/transcriptions` with SSE streaming (`stream: true`), partial transcript events. 3 ignored Speaches integration tests. **Skipped:** Realtime WS mode (Speaches bug) |
-| 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 8 | `OpenAiProvider` SSE streaming with configurable `base_url` (works with any OpenAI-compatible server), `AgentCore` (max 5 tool iters, 30s timeout), `ConversationMemory`, streamed-partial retention on cancellation, `Tool` trait. **Missing:** integration test, concrete tool impls |
-| 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM from `/v1/audio/speech`, cancel support, sentence-boundary streaming wired in orchestrator. 4 ignored Speaches integration tests |
-| 8 | **Integration** — end-to-end with interrupt | ✅ Done | 8 | E2E stub tests (full flow + explicit providers + terminate + VAD + backpressure), barge-in interrupt test, sentence-boundary test, new-speech-cancels-previous-ASR regression |
-| 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16 approach (no codec conversion needed). ARI WS event loop, per-call ephemeral TCP port, CancellationToken per call, DTMF → terminate, local Docker Compose verified from project root, ignored integration tests for ARI REST, WebSocket, endpoint status, and originate/hangup. |
-| 10 | **Observability** — metrics, config validation, fallbacks | ✅ Done | 2 | Prometheus metrics (9 metrics), `init_metrics()`, binary entry point, graceful shutdown, fallback provider wiring in `core::session`, session lifecycle metrics in `PipelineSession` |
-| 11 | **loadtest** — virtual phone load harness | ✅ Done | 12+3i | `voicebot-loadtest` crate: Asterisk external-media + xphone native SIP backends, outbound + inbound modes, campaign scheduler (concurrency, ramp-up, rate-limit, soak), stutter scoring, per-call artifacts, Markdown + JSON reports, 3 ignored xphone integration tests |
+| 2 | **vad** — energy-threshold VAD + Speaches | ✅ Done | 14 | `rms_energy`, `is_voiced`, `FrameChunker`, `VadComponent` state machine, `SpeachesVadClient` batch VAD |
+| 3 | **core** — orchestrator + session + stubs | ✅ Done | 13+2i | `Orchestrator` with provider triggering, sentence-boundary TTS streaming, cooperative barge-in, partial assistant history retention, `PipelineSession` with per-utterance ASR fanout |
+| 4 | **transport/websocket** — WS server + protocol | ✅ Done | 6 | Axum handler, dual router, `ClientMessage`/`ServerMessage` JSON, bidirectional bridge |
+| 5 | **asr** — Speaches OpenAI-compatible provider | ✅ Done | 2+3i | `SpeachesAsrProvider` multipart POST + SSE streaming. Skipped: Realtime WS (Speaches bug) |
+| 6 | **agent** — OpenAI-compatible provider + tool loop | 🟡 Partial | 8 | `OpenAiProvider` SSE streaming, `AgentCore` (max 5 tool iters), `ConversationMemory`, `Tool` trait. Missing: integration test, concrete tool impls |
+| 7 | **tts** — Speaches OpenAI-compatible provider | ✅ Done | 2+4i | `SpeachesTtsProvider` streaming PCM, cancel support, sentence-boundary streaming |
+| 8 | **Integration** — end-to-end with interrupt | ✅ Done | 8 | E2E stub tests, barge-in interrupt, sentence-boundary, ASR interrupt regression |
+| 9 | **transport/asterisk** — ARI adapter | ✅ Done | 4i | AudioSocket+slin16, ARI WS event loop, per-call ephemeral TCP port, DTMF → terminate |
+| 10 | **Observability** — metrics, config, fallbacks | ✅ Done | 2 | Prometheus (9 metrics), binary entry point, graceful shutdown, fallback provider wiring |
+| 11 | **loadtest** — virtual phone load harness | ✅ Done | 12+3i | xphone SIP backend, outbound+inbound, campaign scheduler, stutter scoring, per-call artifacts |
 
----
+### Remaining Voice Engine Items
 
-## Infrastructure
+- [ ] Agent: concrete tool impls (at least one working tool)
+- [ ] Agent: integration test with real LLM
+- [ ] FinalTranscript never-drop backpressure test
 
-| Component | Status | Notes |
+### Infrastructure
+
+| Component | Status |
+| --- | --- |
+| Speaches server | ✅ `system/speaches/compose.cpu.yaml` |
+| Asterisk ARI | ✅ `system/asterisk/docker-compose.yaml` |
+| Web demo | ✅ `system/voicebot-core-demo/` |
+| Monitoring | ✅ `system/monitoring/` (Prometheus + Grafana) |
+
+### Provider Strategy
+
+All providers use OpenAI-compatible APIs via `base_url`.
+
+| Component | Default Provider | API Endpoint |
 | --- | --- | --- |
-| **Speaches server** | ✅ Running | `system/speaches/compose.cpu.yaml`, CPU mode, HF cache bind-mounted to host |
-| **Speaches skill** | ✅ Done | `skills/speaches/SKILL.md` — integration patterns for ASR, TTS, VAD, Realtime WS |
-| **API reference** | ✅ Done | `docs/speaches/api-reference.md` — full endpoint reference from source |
-| **Asterisk ARI skill** | ✅ Done | `skills/asterisk_ari/SKILL.md` — ARI Stasis lifecycle, AudioSocket wire protocol, REST channel control, event deserialization, DTMF handling |
-| **Web demo** | ✅ Done | `system/voicebot-core-demo/` — browser mic → WS → chat UI + TTS playback; `start.sh` boots Speaches + voicebot server + static server in one command |
+| ASR | Speaches | `POST /v1/audio/transcriptions` (SSE) |
+| TTS | Speaches | `POST /v1/audio/speech` (streaming PCM) |
+| LLM | Any OpenAI-compatible | `POST /v1/chat/completions` (SSE) |
 
 ---
 
-## Provider Strategy
+## Part 2 — Production Platform
 
-All providers use OpenAI-compatible APIs. Speaches implements these APIs locally; any OpenAI-compatible server (vLLM, Ollama, LiteLLM, etc.) can be swapped in via `base_url`.
+### Vision
 
-| Component | Provider | API Endpoint | Base URL (default) |
-| --- | --- | --- | --- |
-| **ASR** | Speaches | `POST /v1/audio/transcriptions` | `http://localhost:8000` |
-| **TTS** | Speaches | `POST /v1/audio/speech` | `http://localhost:8000` |
-| **LLM** | OpenAI-compatible | `POST /v1/chat/completions` (SSE stream) | `http://localhost:8000` |
+Transform the single-session voicebot engine into a **scalable SaaS telephony platform**:
 
-### OpenAI STT API (used by ASR)
-
-- **Endpoint:** `POST /v1/audio/transcriptions`
-- **Input:** multipart form — `file` (audio), `model`, `language`, `response_format`
-- **Models:** `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`
-- **Formats:** `json`, `text`, `verbose_json`, `srt`, `vtt`
-- **Streaming:** `stream: true` → SSE with `transcript.text.delta` / `transcript.text.done` events
-- **Realtime:** `wss://…/v1/realtime?intent=transcription` for full-duplex audio streaming
-
-### OpenAI TTS API (used by TTS)
-
-- **Endpoint:** `POST /v1/audio/speech`
-- **Input:** JSON — `model`, `voice`, `input`, `response_format`, `instructions`
-- **Models:** `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`
-- **Output formats:** `mp3` (default), `opus`, `aac`, `flac`, `wav`, `pcm` (24kHz 16-bit LE raw)
-- **Streaming:** chunked transfer encoding — audio plays before full generation
-- **Best latency:** use `wav` or `pcm` format
+- Multiple **customer accounts** (tenants) self-serve through a dashboard
+- Each tenant manages **campaigns** (inbound, outbound, or hybrid)
+- Each campaign has its own system prompt, instructions, tools, voices, and metrics
+- Voicebot core is **stateless** — durable state in PostgreSQL, hot state in Redis
+- Horizontal scaling via N voicebot-core instances behind a load balancer
+- **Next.js dashboard** for campaign lifecycle control and real-time analytics
+- **Microservice architecture** — Management API, Voicebot Core, and Campaign Scheduler are separate deployable services
 
 ---
 
-## What's Next
+### Architecture
 
-### Priority 1 — Realtime WS ASR (M5)
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Next.js Dashboard (Thin BFF)                     │
+│  Next.js 15 App Router · TypeScript · Tailwind v4 · shadcn/ui      │
+│  TanStack Query (data) · SSE (live metrics) · httpOnly cookie auth  │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │ HTTPS / WSS
+┌────────────────────────────▼────────────────────────────────────────┐
+│                      API Gateway / Load Balancer                    │
+│                     (nginx / traefik / cloud LB)                    │
+└───────┬──────────────────────────────────┬──────────────────────────┘
+        │                                  │
+┌───────▼──────────────┐        ┌──────────▼─────────────────────────┐
+│  Management API       │        │   Voicebot Core (N instances)      │
+│  (Rust / Axum)        │        │   Stateless real-time pipeline     │
+│  SEPARATE BINARY      │        │   SEPARATE BINARY                  │
+│                       │        │                                    │
+│  • Auth (JWT)         │        │   • WS transport (token auth)      │
+│  • Tenant CRUD        │        │   • Asterisk ARI transport         │
+│  • Campaign CRUD      │        │   • VAD → ASR → Agent → TTS       │
+│  • Analytics / CDR    │        │   • Session state → Redis          │
+│  • SSE live metrics   │        │   • CDR write → PostgreSQL         │
+│  • Usage tracking     │        │   • Campaign config from Redis     │
+│  • OpenAPI (utoipa)   │        │   • Recording upload → RustFS/S3   │
+└───────┬──────────────┘        └──────────┬─────────────────────────┘
+        │                                  │
+┌───────▼──────────────────────────────────▼──────────────────────────┐
+│   PostgreSQL                    │   Redis                           │
+│                                 │                                   │
+│   • tenants, users              │   • session state (TTL)           │
+│   • campaigns, prompt_versions  │   • campaign config cache         │
+│   • call_records (CDR)          │   • active session sets           │
+│   • contacts, contact_lists     │   • rate limiters                 │
+│   • usage_records               │   • pub/sub config reload         │
+│   • phone_numbers               │                                   │
+└─────────────────────────────────┴───────────────────────────────────┘
+        │                                  │
+┌───────▼──────────────┐        ┌──────────▼──────────────────────────┐
+│  Campaign Scheduler   │        │   Object Storage (RustFS / MinIO)  │
+│  (Rust / apalis)      │        │   S3-compatible API                │
+│  SEPARATE BINARY      │        │                                    │
+│                       │        │   • Call recordings (configurable)  │
+│  • Outbound dialer    │        │   • Contact list imports           │
+│  • Post-call analysis │        │   • Export artifacts               │
+│  • Retry / backoff    │        │                                    │
+│  • Schedule windows   │        │   Config: on/off per tenant/camp.  │
+│  • Rate limiting      │        │   Dev: RustFS · Prod: MinIO/S3     │
+└───────────────────────┘        └────────────────────────────────────┘
+```
 
-- [x] **SSE streaming ASR** — use `stream: true` on `/v1/audio/transcriptions` to emit `PartialTranscript` events
-- [~] **Realtime WebSocket ASR** — use Speaches `/v1/realtime` for full-duplex audio streaming (lower latency) _(skipped — Speaches bug)_
-- [x] **Sentence-boundary TTS** — orchestrator extracts sentences from agent partial responses, sends each to TTS immediately
-- [x] **Barge-in interrupt** — SpeechStarted during Transcribing, AgentThinking, or Speaking cancels the previous turn and returns to Listening
-- [x] **Interrupted partial history retention** — keep only the already streamed assistant text when LLM output is cut off by new speech
+### Design Decisions
 
-### Priority 2 — End-to-end integration (M8)
-
-- [x] E2E test with stubs — full pipeline: audio → VAD → ASR → Agent → TTS → egress
-- [x] E2E test with explicit providers — verify provider injection works
-- [x] Terminate cancels tasks — verify session cleanup
-- [x] Audio fixtures — WAV files for deterministic testing
-- [x] ASR integration tests — 3 `#[ignore]` tests with Speaches
-- [x] TTS integration tests — 4 `#[ignore]` tests with Speaches
-- [x] E2E pipeline integration test — `#[ignore]` test using Speaches ASR+TTS
-- [x] **E2E interrupt test** — barge-in during speaking cancels TTS, returns to Listening
-- [x] **Sentence boundary test** — verifies sentence extraction and flushing logic
-- [x] **ASR interrupt regression** — new speech cancels an older ASR transcription that is still finishing
-- [ ] **FinalTranscript never-drop test** — verify backpressure doesn't lose transcripts
-
-### Priority 3 — Agent improvements (M6)
-
-- [x] Configurable `base_url` for OpenAI-compatible servers (Speaches, vLLM, Ollama, etc.)
-- [ ] **Concrete tool impls** — at least one working tool (e.g. time lookup, weather stub)
-- [ ] **Agent integration test** — `#[ignore]` test with real LLM call
-
-### Priority 4 — Asterisk transport (M9)
-
-- [x] **ARI skill written** — `skills/asterisk_ari/SKILL.md` with full protocol reference
-- [x] **AsterisConfig in AppConfig** — `[asterisk]` section parsed from config.toml
-- [x] **ARI WebSocket adapter** — connect to Asterisk ARI WS event stream, dispatch StasisStart/End/DTMF
-- [x] **AudioSocket TCP server** — per-call ephemeral port, packet encode/decode (0x00/0x01/0x10)
-- [x] **slin16 passthrough** — AudioSocket `format=slin16` means no codec conversion needed
-- [x] **ARI REST client** — answer, externalMedia, bridge, hangup via reqwest
-- [x] **DTMF → cancel** — `#` or `*` cancels session via CancellationToken
-- [x] **Bridge cleanup** — destroy bridge and hang up on session end or error
-- [x] **Integration test** — `#[ignore]` tests with real Asterisk
-- [x] **Docker Compose** — `system/asterisk/docker-compose.yaml` for local testing
-
-### Priority 5 — Observability + hardening (M10)
-
-- [x] Prometheus metrics — 9 metrics instrumented
-- [x] Config fail-fast — validate all required keys at startup
-- [x] Binary entry point + graceful shutdown
-- [x] **Fallback provider wiring** — primary/fallback config in `core::session`, auto-switch on retry exhaustion
-- [x] **Session metrics** — `session_started()`/`session_ended()` calls in `PipelineSession`
-
-### Priority 6 — Phone call loadtesting (M11)
-
-- [x] **New package `crates/loadtest`** — library + CLI for campaign execution (`cargo run -p voicebot-loadtest -- ...`)
-- [x] **Phone backend abstraction** — keep signaling/media backend behind a trait; do not hardwire the first implementation into core or `transport/asterisk`
-- [x] **Outbound mode** — Asterisk external-media (Phase 1) and xphone native SIP (Phase 2) backends both support outbound calls with WAV playback, RX recording, and summary output
-- [x] **Inbound mode** — register virtual phones, wait for inbound INVITE via `on_incoming` callback, answer automatically, run the same scripted conversation flow; `campaign.mode = "inbound"` config, `Phase1InboundRequest`, xphone-only
-- [x] **Campaign scheduler** — `run_campaign`: bounded concurrency, ramp-up, rate-limiting (`call_rate_per_second`), soak mode (`soak_duration_secs`); per-call subdirectory artifacts
-- [x] **Audio scoring** — `stutter_count` added to `CallAnalysis`; counts short inter-voiced-region gaps (< `stutter_gap_ms`)
-- [x] **Artifacts + reports** — per-call rx WAV in `calls/{N:04}/rx.wav`; `campaign.json` (JSON) + `report.md` (Markdown) with P50/P90/P99 first-response, avg gap, stutter totals
-- [x] **Phase 2 native SIP backend** — `XphoneBackend` registers with Asterisk via `xphone` crate, places outbound calls with paced PCM playback, records RX audio, 8k↔16k resampling, spawn_blocking tokio bridge, 2 `#[ignore]` integration tests
+| # | Decision | Rationale |
+|---|---|---|
+| 1 | **Microservices** — Management API, Voicebot Core, and Scheduler are separate binaries | Independent scaling, independent deploy cycles; API handles CRUD while core handles real-time audio |
+| 2 | **Stateless core** — conversation memory in Redis, CDR flushed to PG | Any core instance handles any call; no session affinity needed |
+| 3 | **Redis hot path, PG durable** — campaign config cached in Redis on activate/update | Sub-ms config reads on session start; config changes propagate via pub/sub |
+| 4 | **Phone number provisioning** — Phase 1: manual Asterisk config; Phase 2: SIP trunk provider API (Twilio/Telnyx) | Get working fast, then automate |
+| 5 | **Call recording** — configurable per tenant/campaign; S3-compatible object storage (RustFS for dev, MinIO/S3 for prod) | Not all campaigns need recordings; `aws-sdk-s3` client works with any S3-compatible store |
+| 6 | **Usage tracking** — track call minutes, concurrent sessions, recording storage per tenant | Foundation for future billing; needed for plan limits enforcement |
+| 7 | **Post-call analysis** — async job via scheduler; LLM analyzes transcript for sentiment, summarization, custom metric extraction | Powerful for custom metrics that are hard to capture in real-time |
+| 8 | **WS auth** — `wss://host/ws?campaign_id=X&token=Y`; short-lived token validated on connect, campaign resolved from token claims | Simple, stateless; no session cookie needed for WS voice sessions |
+| 9 | **Next.js thin BFF** — server components for SSR, API routes proxy to Rust backend, httpOnly cookie auth | Hides Rust API from browser, secure cookie handling, fast initial paint |
 
 ---
 
-## Proposed Milestone 11 — Phone Call Load Testing
+### Data Model
 
-### Goal
+#### Tenants
 
-Add a dedicated load-testing package that behaves like many virtual phones against the existing Asterisk + voicebot stack. The harness should be able to:
-
-- register as SIP endpoints
-- place outbound calls into the voicebot
-- receive inbound calls from the voicebot/Asterisk side
-- send prepared WAV files as caller speech at scripted points in the conversation
-- record the audio received by the virtual phone
-- score responsiveness and smoothness of that received audio
-- summarize failures, latency, and quality across a whole campaign
-
-This is a transport-side test harness. It must stay outside the production pipeline and must not couple `core` to SIP or load-test concerns.
-
-### Research-Based Recommendation
-
-The repo already has the right server-side pieces for this work:
-
-- Asterisk ARI transport is implemented, with inbound call handling and per-call AudioSocket bridging.
-- ARI REST already supports originate/hangup, which is enough to drive inbound-to-phone scenarios once virtual endpoints exist.
-- Asterisk test SIP endpoint config already exists (`voicebot` / extension `1000`) and accepts registrations.
-- Canonical internal audio is already stable: 16 kHz mono i16 via `AudioFrame`.
-- Session and latency metrics already exist on the voicebot side.
-
-What does not exist yet is a client-side phone emulator. Because Rust SIP user-agent support is much riskier than the current ARI side, the package should be designed around a backend abstraction from day one:
-
-- Phase 1 recommendation: implement a pragmatic backend that can be supervised reliably for registration, call answer/dial, WAV playback, and RX recording.
-- Do not bake a native SIP stack assumption into the package API.
-- Keep the backend replaceable so a future native Rust UA can be added later without rewriting campaign logic, scoring, or reporting.
-
-After researching the Rust telephony ecosystem, Phase 2 should explicitly target `xphone` as the native SIP backend:
-
-- `xphone` is the strongest fit for the next milestone because it already exposes SIP registration, inbound/outbound call handling, DTMF, and PCM media channels in Rust.
-- `fakepbx` is useful as a test helper for SIP integration, but not as the runtime phone backend.
-- `rvoip` and C-library bindings (`pjsip`, `sofia-sip`) add more integration risk than value for this repo at the current stage.
-- Low-level crates such as `sip-uri`, `sdp`, `rtp`, and `stun` remain optional helpers, not Phase 2 foundations.
-
-### Package Shape
-
-Add a new workspace package:
-
-```text
-voicebot/crates/loadtest/
-  src/
-    lib.rs
-    cli.rs
-    config.rs
-    campaign.rs
-    scheduler.rs
-    phone/
-      mod.rs
-      backend.rs
-      session.rs
-      media.rs
-    flow/
-      mod.rs
-      step.rs
-      runner.rs
-    analysis/
-      mod.rs
-      gaps.rs
-      stutter.rs
-      smoothness.rs
-      summary.rs
-    report/
-      mod.rs
-      json.rs
-      markdown.rs
-      html.rs
-  tests/
-    campaign_smoke.rs
-    asterisk_integration.rs
+```sql
+CREATE TABLE tenants (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL,
+    slug            TEXT NOT NULL UNIQUE,
+    status          TEXT NOT NULL DEFAULT 'active',  -- active | suspended | trial
+    plan            TEXT NOT NULL DEFAULT 'basic',   -- basic | pro | enterprise
+    max_concurrent  INT NOT NULL DEFAULT 10,
+    settings        JSONB DEFAULT '{}'::jsonb,       -- provider defaults, recording prefs
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
-Recommended dependency boundaries:
+#### Users
 
-- `loadtest` may depend on `common` for shared audio utilities and config types where useful.
-- `loadtest` must not require `core` internals.
-- If ARI originate helpers are needed, either expose a tiny shared ARI helper crate later or duplicate the minimal REST client instead of coupling to `transport/asterisk` internals.
-
-### Core Concepts
-
-#### 1. Campaign
-
-A campaign is the top-level load run. It owns:
-
-- run ID and seed
-- target environment
-- number of virtual phones
-- ramp policy
-- concurrency limit
-- scenario assignment
-- artifact directory
-- global stop conditions
-
-Example stop conditions:
-
-- total call attempts reached
-- duration exceeded
-- registration failure ratio too high
-- active call error ratio above threshold
-- manual stop signal
-
-#### 2. Virtual Phone
-
-A virtual phone is a long-lived client identity with its own SIP credentials and media state.
-
-Each phone should have:
-
-- phone ID
-- SIP username / password / extension
-- registration state
-- current call state
-- media sender for scripted WAV playback
-- media receiver/recorder for incoming audio
-- per-call statistics
-
-The scheduler should keep a pool of phones so campaigns can model either:
-
-- many short-lived anonymous callers, or
-- a stable fleet of registered handsets receiving and placing calls repeatedly
-
-#### 3. Call Session
-
-A call session is one executed scenario on one phone. It should emit a detailed timeline:
-
-- register start / success / failure
-- dial start or inbound INVITE received
-- answer timestamp
-- each script step start / end
-- each WAV playback start / end
-- first received audio timestamp
-- silence-gap windows
-- hangup cause
-- final result and score
-
-### Backend Abstraction
-
-The phone emulator must not assume one signaling/media implementation. Define a narrow trait boundary such as:
-
-```rust
-trait PhoneBackend {
-    async fn register(&mut self, phone: &PhoneIdentity) -> Result<(), PhoneError>;
-    async fn unregister(&mut self, phone_id: &str) -> Result<(), PhoneError>;
-    async fn dial(&mut self, request: OutboundCallRequest) -> Result<ActiveCall, PhoneError>;
-    async fn wait_for_inbound(&mut self, phone_id: &str, timeout_ms: u64) -> Result<InboundCall, PhoneError>;
-    async fn answer(&mut self, call_id: &str) -> Result<(), PhoneError>;
-    async fn play_wav(&mut self, call_id: &str, path: &Path) -> Result<PlaybackHandle, PhoneError>;
-    async fn start_recording(&mut self, call_id: &str, path: &Path) -> Result<(), PhoneError>;
-    async fn stop_recording(&mut self, call_id: &str) -> Result<(), PhoneError>;
-    async fn send_dtmf(&mut self, call_id: &str, digits: &str) -> Result<(), PhoneError>;
-    async fn hangup(&mut self, call_id: &str) -> Result<(), PhoneError>;
-}
+```sql
+CREATE TABLE users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id),
+    email           TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'viewer',   -- owner | admin | editor | viewer
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
-That keeps campaign logic independent from the first backend implementation.
+#### Campaigns
 
-### Conversation Flow Interface
+```sql
+CREATE TABLE campaigns (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id),
+    name            TEXT NOT NULL,
+    description     TEXT,
+    status          TEXT NOT NULL DEFAULT 'draft',   -- draft | active | paused | completed | archived
+    direction       TEXT NOT NULL DEFAULT 'inbound', -- inbound | outbound | both
 
-The flow layer should support both declarative scenarios and custom Rust extensions.
+    -- Voice pipeline config
+    system_prompt   TEXT NOT NULL,
+    instructions    TEXT,
+    language        TEXT NOT NULL DEFAULT 'auto',
+    asr_model       TEXT,
+    tts_model       TEXT,
+    tts_voice       TEXT,
+    llm_model       TEXT,
+    llm_temperature REAL DEFAULT 0.7,
+    llm_max_tokens  INT DEFAULT 512,
 
-#### Declarative scenario file
+    -- Provider overrides (null = use tenant defaults)
+    asr_base_url    TEXT,
+    tts_base_url    TEXT,
+    llm_base_url    TEXT,
 
-Use TOML for the first version so it matches the rest of the repo.
+    -- Tools / function calling
+    tools_config    JSONB DEFAULT '[]'::jsonb,
 
-```toml
-[campaign]
-name = "basic-outbound"
-mode = "outbound"
-concurrency = 20
-ramp_calls_per_sec = 2
+    -- Outbound dialer config
+    caller_id       TEXT,
+    dial_list_id    UUID,
+    max_concurrent  INT DEFAULT 5,
+    call_rate_per_minute INT DEFAULT 10,
+    retry_attempts  INT DEFAULT 2,
+    retry_delay_min INT DEFAULT 30,
+    schedule_start  TIME,
+    schedule_end    TIME,
+    schedule_tz     TEXT DEFAULT 'UTC',
 
-[target]
-dial_string = "PJSIP/1000"
+    -- Recording config
+    recording_enabled BOOLEAN DEFAULT false,
 
-[[steps]]
-type = "play_wav"
-path = "tests/fixtures/audio/hello.wav"
+    -- Custom metrics definition
+    custom_metrics  JSONB DEFAULT '[]'::jsonb,
 
-[[steps]]
-type = "expect_audio"
-within_ms = 1500
-min_duration_ms = 500
+    -- Versioning
+    version         INT NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
-[[steps]]
-type = "wait_for_silence"
-max_ms = 8000
-
-[[steps]]
-type = "hangup"
+CREATE INDEX idx_campaigns_tenant ON campaigns(tenant_id);
+CREATE INDEX idx_campaigns_status ON campaigns(tenant_id, status);
 ```
 
-#### Extensible step runner
+#### Prompt Versions
 
-Support a Rust trait for advanced or generated flows:
-
-```rust
-trait FlowStep {
-    async fn run(&self, ctx: &mut CallFlowContext) -> Result<StepOutcome, FlowError>;
-}
+```sql
+CREATE TABLE prompt_versions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    campaign_id     UUID NOT NULL REFERENCES campaigns(id),
+    version         INT NOT NULL,
+    system_prompt   TEXT NOT NULL,
+    instructions    TEXT,
+    tools_config    JSONB DEFAULT '[]'::jsonb,
+    created_by      UUID REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(campaign_id, version)
+);
 ```
 
-Initial built-in steps:
+#### Contact Lists
 
-- `register`
-- `wait_for_inbound`
-- `dial`
-- `answer`
-- `play_wav`
-- `play_sequence`
-- `send_dtmf`
-- `wait`
-- `expect_audio`
-- `wait_for_silence`
-- `assert_max_gap`
-- `assert_call_duration`
-- `hangup`
+```sql
+CREATE TABLE contact_lists (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id),
+    campaign_id     UUID REFERENCES campaigns(id),
+    name            TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
-### Supported Test Modes
+CREATE TABLE contacts (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    list_id         UUID NOT NULL REFERENCES contact_lists(id),
+    phone_number    TEXT NOT NULL,
+    name            TEXT,
+    metadata        JSONB DEFAULT '{}'::jsonb,
+    status          TEXT NOT NULL DEFAULT 'pending', -- pending | called | completed | failed | dnc
+    last_attempt_at TIMESTAMPTZ,
+    attempt_count   INT DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
-#### Outbound load test
-
-Virtual phones initiate calls toward the system under test.
-
-Use this to measure:
-
-- call setup throughput
-- answer latency
-- first-response latency after caller speech
-- end-to-end voice smoothness under concurrency
-
-#### Inbound load test
-
-Virtual phones register first, then wait for the voicebot side to call them.
-
-Use this to measure:
-
-- outbound dialer behavior from the system side
-- answer and media establishment success rate
-- first media delivery latency after answer
-- conversation quality when the system originates many simultaneous calls
-
-For inbound mode, the loadtest package should support two trigger styles:
-
-- external trigger: wait for some other system to place calls
-- ARI-assisted trigger: optionally use Asterisk originate to call the registered virtual phones during test setup
-
-### Audio Handling
-
-The media path must be explicit and deterministic.
-
-- Normalize every input WAV before playback.
-- Store the normalized copy as a run artifact so analysis can refer to the exact transmitted audio.
-- Record received audio per call as WAV.
-- Track timestamps for TX start, TX end, RX first non-silent frame, RX silence windows, and hangup.
-
-Normalization rules for version 1:
-
-- accept mono or stereo WAV input
-- resample to a backend-supported format before sending
-- keep an analysis copy in 16 kHz mono i16 for consistent scoring
-- reject unsupported files at campaign startup, not mid-call
-
-### Quality Metrics
-
-The first version should produce simple, explainable scores instead of a fake MOS number.
-
-#### Raw per-call metrics
-
-- registration latency ms
-- call setup latency ms
-- answer latency ms
-- first-response latency ms
-- total received audio duration ms
-- received silence duration ms
-- longest silence gap ms
-- count of silence gaps over threshold
-- count of likely stutter/repeat events
-- count of clipping windows
-- call completion result
-- SIP / backend error code
-
-#### Gap / processing metrics
-
-Measure perceived dead air from the caller perspective:
-
-- `first_response_ms`: from end of the scripted caller utterance to first non-silent received audio
-- `inter_chunk_gap_ms`: max and p95 silent gap between consecutive non-silent received regions
-- `turn_gap_ms`: per conversation turn delay between caller playback end and bot response start
-
-These are the core "processing time" metrics the summary should highlight.
-
-#### Stutter heuristics
-
-Keep the first version heuristic-based and transparent:
-
-- repeated short audio windows in RX that are near-identical and adjacent
-- unnatural alternation of very short speech and silence windows
-- repeated transcript fragments if optional ASR-on-RX is enabled later
-
-Output:
-
-- `stutter_events`
-- `stutter_ms_total`
-- `stutter_score` from 0 to 100
-
-#### Smoothness score
-
-Define a composite score from transparent penalties:
-
-```text
-smooth_score = 100
-  - gap_penalty
-  - stutter_penalty
-  - clipping_penalty
-  - underrun_penalty
+CREATE INDEX idx_contacts_list_status ON contacts(list_id, status);
 ```
 
-Where penalties are based on thresholds committed in config, not hard-coded magic in the report.
+#### Call Records (CDR)
 
-The report should always show both the composite score and its component penalties.
+```sql
+CREATE TABLE call_records (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id),
+    campaign_id     UUID NOT NULL REFERENCES campaigns(id),
+    session_id      UUID NOT NULL UNIQUE,
+    contact_id      UUID REFERENCES contacts(id),
 
-### Optional Phase-2 Analysis
+    direction       TEXT NOT NULL,                    -- inbound | outbound
+    caller_number   TEXT,
+    callee_number   TEXT,
+    status          TEXT NOT NULL,                    -- completed | failed | no_answer | busy | error
 
-Once the basics work, extend the analyzer with optional checks:
+    started_at      TIMESTAMPTZ NOT NULL,
+    answered_at     TIMESTAMPTZ,
+    ended_at        TIMESTAMPTZ,
+    duration_secs   REAL,
 
-- run ASR on received audio and compare transcripts across calls
-- keyword / phrase hit rate for scripted prompts
-- semantic drift detection for repeated campaigns
-- waveform similarity versus a golden baseline prompt
+    -- Transcript
+    transcript      JSONB,                           -- [{role, text, timestamp_ms}]
 
-These are useful, but they should not block the first implementation.
+    -- Technical metrics
+    first_response_ms   INT,
+    turn_count          INT,
+    interrupt_count     INT,
+    asr_latency_avg_ms  INT,
+    llm_latency_avg_ms  INT,
+    tts_latency_avg_ms  INT,
 
-### Reporting and Artifacts
+    -- Custom metrics (campaign-defined)
+    custom_metrics  JSONB DEFAULT '{}'::jsonb,
 
-Each campaign should write a deterministic artifact tree such as:
+    -- Recording
+    recording_path  TEXT,                            -- S3 key if recording enabled
 
-```text
-artifacts/loadtest/<run_id>/
-  config.resolved.toml
-  summary.json
-  summary.md
-  summary.html
-  metrics.ndjson
-  calls/
-    <call_id>/
-      events.ndjson
-      tx/
-        001_hello.normalized.wav
-      rx/
-        received.wav
-      analysis.json
+    -- Disposition
+    disposition     TEXT,
+    disposition_notes TEXT,
+
+    -- Post-call analysis
+    analysis        JSONB,                           -- {summary, sentiment, extracted_metrics}
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_cdr_tenant ON call_records(tenant_id);
+CREATE INDEX idx_cdr_campaign ON call_records(campaign_id);
+CREATE INDEX idx_cdr_session ON call_records(session_id);
+CREATE INDEX idx_cdr_time ON call_records(tenant_id, started_at);
 ```
 
-Campaign summary must include:
+#### Phone Numbers
 
-- attempted / connected / completed / failed call counts
-- registration success rate
-- answer success rate
-- p50 / p95 / p99 first-response latency
-- p50 / p95 longest silence gap
-- average and worst smoothness score
-- top error classes
-- slowest calls and most degraded calls
+```sql
+CREATE TABLE phone_numbers (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id),
+    number          TEXT NOT NULL UNIQUE,
+    campaign_id     UUID REFERENCES campaigns(id),  -- null = unassigned
+    provider        TEXT NOT NULL DEFAULT 'manual',  -- manual | twilio | telnyx
+    provider_sid    TEXT,                            -- external provider ID
+    direction       TEXT NOT NULL DEFAULT 'both',    -- inbound | outbound | both
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
-### Config Surface
+CREATE INDEX idx_phone_numbers_tenant ON phone_numbers(tenant_id);
+CREATE INDEX idx_phone_numbers_number ON phone_numbers(number);
+```
 
-Add a dedicated loadtest config file rather than stretching `voicebot/config.toml`.
+#### Usage Tracking
 
-Suggested top-level sections:
+```sql
+CREATE TABLE usage_records (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id),
+    campaign_id     UUID REFERENCES campaigns(id),
+    record_type     TEXT NOT NULL,                   -- call_minutes | concurrent_peak | recording_bytes | post_call_analysis
+    quantity        REAL NOT NULL,
+    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
-- `[backend]`
-- `[campaign]`
-- `[target]`
-- `[phones]`
-- `[media]`
-- `[analysis]`
-- `[report]`
+CREATE INDEX idx_usage_tenant_time ON usage_records(tenant_id, recorded_at);
+CREATE INDEX idx_usage_type ON usage_records(tenant_id, record_type, recorded_at);
+```
 
-Important config fields:
+#### Custom Metrics Definition (JSONB in campaigns.custom_metrics)
 
-- backend type
-- registrar / SIP target / dial string
-- credentials template
-- phone count
-- concurrency
-- ramp-up calls/sec
-- max active calls
-- retries and backoff
-- artifact directory
-- silence threshold ms
-- stutter window ms
-- score thresholds
+```json
+[
+    {
+        "key": "callee_interested",
+        "type": "boolean",
+        "label": "Callee Interested",
+        "description": "Whether the callee expressed interest",
+        "collection": "agent_tool",
+        "tool_name": "record_interest"
+    },
+    {
+        "key": "campaign_outcome",
+        "type": "enum",
+        "label": "Campaign Outcome",
+        "options": ["sale", "callback", "not_interested", "wrong_number"],
+        "collection": "agent_tool",
+        "tool_name": "set_outcome"
+    },
+    {
+        "key": "sentiment_score",
+        "type": "number",
+        "label": "Sentiment Score",
+        "description": "Overall sentiment 1-5",
+        "collection": "post_call_analysis"
+    }
+]
+```
 
-### Failure Model
+**Metric types:** boolean, number, enum, text
 
-The loadtest harness should classify failures instead of collapsing everything into "call failed":
-
-- registration failed
-- registration timed out
-- outbound dial failed
-- inbound call not received
-- answer failed
-- media playback failed
-- receive recording failed
-- no bot audio returned
-- excessive silence gap
-- stutter threshold exceeded
-- abnormal hangup / backend crash
-
-This matters because scaling bugs and media-quality bugs are different classes of regressions.
-
-### Execution Phases
-
-#### Phase 1 — single-call MVP
-
-- one virtual phone
-- outbound mode only
-- play one WAV, record RX, write summary JSON
-- no scoring beyond first-response and silence-gap metrics
-
-#### Phase 2 — xphone-backed virtual phones
-
-- add an `xphone` backend for native SIP registration and call control
-- support reusable virtual-phone identities with register / unregister lifecycle
-- add inbound and outbound call execution on top of the same flow runner
-- keep the existing Asterisk external-media backend as a simpler fallback backend
-
-#### Phase 3 — inbound mode
-
-- campaign scheduler, phone pool, concurrency, retries, and stop conditions
-- same flow runner reused across Asterisk-backed and `xphone`-backed sessions
-- artifact tree growth from single-call outputs to campaign outputs
-
-#### Phase 4 — scoring and quality analytics
-
-- stutter heuristics
-- composite smoothness score
-- per-turn and per-call degradation ranking
-
-#### Phase 5 — hardening
-
-- soak tests
-- failure-injection scenarios
-- deterministic fixtures and golden summaries
-- optional ASR-on-RX analysis
-
-### Test Strategy
-
-- unit tests for config parsing, flow runner, gap detection, and scoring
-- fixture-driven tests for WAV normalization and audio analysis
-- ignored Asterisk integration tests for register/dial/answer/record flows
-- one small smoke campaign in CI-safe mode using a mocked backend
-
-### Non-Goals for the First Cut
-
-- building a full SIP stack inside `core`
-- modifying the voicebot pipeline to know about load tests
-- real-time dashboards before artifact generation works
-- black-box "AI quality score" with no transparent inputs
-
-### Deliverable Standard for the Later Implementation Prompt
-
-The eventual implementation should not stop at "it can make a call". A usable first deliverable must include all of the following together:
-
-- repeatable campaign config
-- at least one working outbound scenario
-- recorded RX audio artifact per call
-- per-call latency metrics
-- a campaign summary file
-- integration coverage for the happy path and at least one failure path
+**Collection methods:**
+- `agent_tool` — real-time via LLM tool calling during the call (auto-generated tool defs)
+- `post_call_analysis` — async LLM analysis of transcript after call ends
+- `manual` — supervisor fills in via dashboard
 
 ---
 
-## Crate Map
+### Making Voicebot Core Stateless
+
+#### Current State → Target State
+
+| State | Current | Target | Storage |
+|---|---|---|---|
+| Conversation memory | In-memory Vec | Redis hash | `session:{id}:memory`, TTL = session + 1h |
+| Orchestrator FSM | In-memory | In-memory (per-connection) | Ephemeral, tied to TCP/WS connection |
+| Campaign config | config.toml | Redis cache | `campaign:{id}:config`, updated on activate |
+| Active sessions | Not tracked | Redis set | `tenant:{id}:sessions`, for concurrent limits |
+| CDR accumulator | Not tracked | In-memory → flush to PG | Batch write on session end |
+| Call recording | Not tracked | Stream to S3 during call | Configurable on/off |
+
+#### Stateless Session Lifecycle
 
 ```
-voicebot/crates/
-  common/          19 tests   ← AudioFrame, PipelineEvent, traits, errors, config
-  vad/             14 tests   ← energy VAD, FrameChunker, VadComponent, SpeachesVadClient
-  asr/              6+3i      ← SpeachesAsrProvider, StubAsrProvider
-  agent/            7 tests   ← OpenAiProvider (base_url), AgentCore, ConversationMemory, Tool trait
-  tts/              6+4i      ← SpeachesTtsProvider, StubTtsProvider
-  core/            11+2i      ← Orchestrator, PipelineSession, build_providers(), observability
-  transport/
-    websocket/      6 tests   ← Axum WS handler (stubs + config), JSON protocol
-    asterisk/       0+4i      ← ARI REST/WebSocket/originate integration tests
-  server/           0 tests   ← Binary entry point (main.rs)
+1. Call arrives (WS with ?campaign_id=X&token=Y, or Asterisk with phone number mapping)
+2. Core validates token / resolves campaign from phone number
+3. Core fetches campaign config from Redis (cache hit) or PG (miss → populate)
+4. Core checks tenant concurrent limit: SCARD + SADD atomic on tenant:{id}:sessions
+5. Core creates PipelineSession with campaign config (system_prompt, tools, etc.)
+6. During call: conversation memory synced to Redis every turn
+7. If recording_enabled: audio streamed to S3 via multipart upload
+8. On call end:
+   a. Flush CDR to PostgreSQL
+   b. Remove session from Redis active set
+   c. Record usage (call_minutes, recording_bytes)
+   d. If post-call analysis configured: enqueue analysis job
+   e. Conversation memory TTL expires naturally
 ```
 
-## Build & Test
+#### Backward Compatibility
 
-```bash
-cd voicebot
-cargo test --workspace                    # all unit tests
-cargo test --workspace -- --include-ignored  # +integration tests (need Speaches running)
-cargo run -p voicebot-server              # start server (needs config.toml + env vars)
+Single-instance dev mode still works: if no Redis/PG configured, fall back to in-memory state + config.toml. Feature-flagged at startup.
 
-# Start local Speaches (CPU mode)
-cd system/speaches
-docker compose --env-file .env.override -f compose.cpu.yaml up -d
+---
+
+### Component Breakdown
+
+#### New Rust Crates
+
+| Crate | Purpose | Key Dependencies |
+|---|---|---|
+| `crates/db` | PostgreSQL — sqlx queries, migrations, connection pool | `sqlx`, `uuid`, `chrono` |
+| `crates/cache` | Redis — session state, config cache, pub/sub | `redis` |
+| `crates/auth` | JWT middleware, password hashing, tenant extraction | `jsonwebtoken`, `argon2` |
+| `crates/storage` | S3-compatible object storage abstraction | `aws-sdk-s3` |
+| `crates/api` | Management REST API (Axum) | `axum`, `utoipa`, all above |
+| `crates/scheduler` | Campaign scheduler — dialer, post-call, retry | `apalis`, `db`, `cache` |
+
+#### New Frontend Package
+
+| Package | Purpose |
+|---|---|
+| `dashboard/` | Next.js 15 thin BFF — TypeScript, Tailwind v4, shadcn/ui |
+
+#### Modified Existing Crates
+
+| Crate | Changes |
+|---|---|
+| `crates/common` | Add `TenantId`, `CampaignId` types; `CampaignConfig` struct |
+| `crates/core` | Redis-backed `ConversationMemory`; campaign config at session start; CDR emit; recording stream |
+| `crates/server` | Split into `voicebot-core` and `voicebot-api` binaries |
+| `crates/agent` | Auto-generate tools from campaign custom metric definitions |
+
+#### Dependency Graph
+
 ```
+common → (no deps)
+db → common
+cache → common
+storage → common
+auth → common, db
+vad → common
+asr → common
+agent → common
+tts → common
+core → common, vad, asr, agent, tts, cache, storage
+api → common, db, cache, auth, storage
+scheduler → common, db, cache, storage
+```
+
+---
+
+### Management API Endpoints
+
+#### Auth
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/auth/register` | Create tenant + owner user |
+| POST | `/api/auth/login` | Email + password → JWT (also sets httpOnly cookie) |
+| POST | `/api/auth/refresh` | Refresh token |
+| POST | `/api/auth/logout` | Clear cookie |
+
+#### Tenants
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/tenants/me` | Current tenant profile |
+| PUT | `/api/tenants/me` | Update tenant settings (provider defaults, recording prefs) |
+| GET | `/api/tenants/me/usage` | Usage summary (call minutes, concurrent peak, storage) |
+
+#### Users
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/users` | List tenant users |
+| POST | `/api/users` | Invite user |
+| PUT | `/api/users/:id` | Update role |
+| DELETE | `/api/users/:id` | Remove user |
+
+#### Campaigns
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/campaigns` | List campaigns (filterable) |
+| POST | `/api/campaigns` | Create campaign |
+| GET | `/api/campaigns/:id` | Get campaign details |
+| PUT | `/api/campaigns/:id` | Update campaign |
+| DELETE | `/api/campaigns/:id` | Archive campaign |
+| POST | `/api/campaigns/:id/activate` | Activate → publish config to Redis |
+| POST | `/api/campaigns/:id/pause` | Pause campaign |
+| POST | `/api/campaigns/:id/duplicate` | Clone campaign |
+| GET | `/api/campaigns/:id/versions` | Prompt version history |
+
+#### Contacts / Dial Lists
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/campaigns/:id/contacts` | Upload contact list (CSV) |
+| GET | `/api/campaigns/:id/contacts` | List contacts with status |
+| PUT | `/api/campaigns/:id/contacts/:cid` | Update contact status |
+| DELETE | `/api/campaigns/:id/contacts/:cid` | Remove contact |
+
+#### Call Records / Analytics
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/campaigns/:id/calls` | Paginated call records |
+| GET | `/api/campaigns/:id/calls/:cid` | Call detail + transcript + recording URL |
+| GET | `/api/campaigns/:id/analytics` | Aggregated campaign analytics |
+| GET | `/api/campaigns/:id/analytics/stream` | SSE live metrics |
+
+#### Phone Numbers
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/phone-numbers` | List tenant's phone numbers |
+| POST | `/api/phone-numbers` | Add number (manual or provision via provider) |
+| PUT | `/api/phone-numbers/:id` | Map number → campaign |
+| DELETE | `/api/phone-numbers/:id` | Remove number |
+
+#### Voice Session Tokens
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/campaigns/:id/session-token` | Generate short-lived WS auth token |
+
+---
+
+### Dashboard Pages
+
+#### Overview / Home
+- Active campaigns summary cards
+- Today's call volume chart
+- Active calls count (real-time via SSE)
+- Quick stats: total calls, avg duration, success rate
+- Usage meter (call minutes vs plan limit)
+
+#### Campaigns List
+- Table: name, status, direction, call count, success rate, actions
+- Filters: status, direction, date range
+- Create campaign button
+
+#### Campaign Detail
+- **Config tab** — system prompt editor with version history, instructions, voice/model selection, tool configuration
+- **Metrics tab** — define custom metrics (boolean, number, enum, text), link to collection method
+- **Contacts tab** (outbound) — CSV upload, contact list with status, progress bar
+- **Schedule tab** (outbound) — calling windows, timezone, rate limits, retry policy
+- **Analytics tab** — call volume over time, avg duration, disposition breakdown, custom metric aggregations, technical metrics P50/P90/P99
+- **Calls tab** — paginated call log with search, expand for transcript + metrics + recording playback
+
+#### Live Monitor
+- Active calls table (real-time SSE)
+- Per-call: session ID, campaign, duration, current state
+- Future: live audio monitoring button
+
+#### Settings
+- Tenant profile
+- User management (invite, roles)
+- Provider configuration (ASR/TTS/LLM endpoints, API keys)
+- Phone number management
+- Recording storage preferences
+- Usage / billing summary
+
+---
+
+### Technology Stack
+
+#### Backend (Rust)
+
+| Component | Crate | Version |
+|---|---|---|
+| HTTP framework | `axum` | 0.8+ |
+| PostgreSQL | `sqlx` | 0.8+ |
+| Redis | `redis` | 1.2+ |
+| JWT auth | `jsonwebtoken` | 10+ |
+| Password hashing | `argon2` | 0.5+ |
+| Object storage | `aws-sdk-s3` | latest |
+| Job queue | `apalis` + `apalis-sql` | 0.7+ |
+| OpenAPI | `utoipa` + `utoipa-axum` | 5+ |
+| API testing | `axum-test` | 20+ |
+| Serialization | `serde` + `serde_json` | 1.x |
+| Async runtime | `tokio` | 1.x |
+
+#### Frontend (Next.js)
+
+| Component | Tool | Version |
+|---|---|---|
+| Framework | Next.js (App Router, thin BFF) | 15+ |
+| Language | TypeScript | 5.7+ |
+| Styling | Tailwind CSS | 4+ |
+| Components | shadcn/ui (Radix primitives) | latest |
+| Data fetching | TanStack Query | 5+ |
+| Forms | React Hook Form + Zod | latest |
+| Tables | TanStack Table | 8+ |
+| Charts | Recharts | 2+ |
+| JWT validation | jose | 6+ |
+| Icons | lucide-react | latest |
+| Package manager | pnpm | latest |
+
+#### Infrastructure
+
+| Component | Tool |
+|---|---|
+| Database | PostgreSQL 16+ |
+| Cache | Redis 7+ |
+| Object storage | RustFS (dev) / MinIO or S3 (prod) |
+| Telephony | Asterisk 20+ (ARI) |
+| ASR/TTS | Speaches (or any OpenAI-compatible) |
+| LLM | Any OpenAI-compatible (vLLM, Ollama, etc.) |
+| Reverse proxy | nginx or traefik |
+| Containers | Docker Compose (dev) → Kubernetes (prod) |
+| Monitoring | Prometheus + Grafana (existing) |
+
+---
+
+### Implementation Phases
+
+#### Phase A — Data Layer & Auth (Foundation)
+
+| # | Task | Status |
+|---|---|---|
+| A1 | Create `crates/db` — sqlx setup, PgPool, DATABASE_URL config | |
+| A2 | Write migrations: tenants, users, campaigns, prompt_versions, contacts, contact_lists, call_records, phone_numbers, usage_records | |
+| A3 | DB query functions — CRUD for all entities, pagination helpers | |
+| A4 | Create `crates/cache` — Redis MultiplexedConnection, session state read/write, config cache get/set, pub/sub | |
+| A5 | Create `crates/auth` — JWT issue/validate, argon2 password hashing, Axum middleware (extract tenant_id + user_id from token) | |
+| A6 | Create `crates/storage` — S3 client abstraction, upload/download/presigned-url, bucket init | |
+| A7 | PostgreSQL RLS policies as defense-in-depth (SET LOCAL app.tenant_id per transaction) | |
+| A8 | Integration tests for DB + cache + storage layers | |
+
+#### Phase B — Management API
+
+| # | Task | Status |
+|---|---|---|
+| B1 | Create `crates/api` — Axum router on `/api`, shared AppState (PgPool, Redis, S3) | |
+| B2 | Auth endpoints: register, login, refresh, logout | |
+| B3 | Tenant endpoints: profile, settings, usage | |
+| B4 | User management: list, invite, update role, remove | |
+| B5 | Campaign CRUD + activate/pause lifecycle (publish config to Redis on activate) | |
+| B6 | Contact list upload (CSV parsing) + CRUD | |
+| B7 | Call records: paginated queries, single call detail, analytics aggregation | |
+| B8 | Phone number management: add, map to campaign, remove | |
+| B9 | Session token generation (short-lived JWT for WS auth) | |
+| B10 | SSE endpoint for live campaign metrics | |
+| B11 | Usage tracking: record call minutes, concurrent peak, storage bytes | |
+| B12 | OpenAPI spec generation with utoipa | |
+| B13 | API integration tests (axum-test) | |
+
+#### Phase C — Stateless Core
+
+| # | Task | Status |
+|---|---|---|
+| C1 | Campaign config resolution: Redis cache → PG fallback on session start | |
+| C2 | Redis-backed ConversationMemory (replace in-memory Vec, with fallback) | |
+| C3 | Concurrent session limit enforcement via Redis SCARD/SADD | |
+| C4 | CDR accumulation during call + async flush to PG on session end | |
+| C5 | Auto-generate agent tools from campaign custom_metrics definitions | |
+| C6 | Campaign config hot-reload via Redis pub/sub | |
+| C7 | Phone number → campaign routing table (Redis lookup) | |
+| C8 | WS auth: validate token from query param, extract campaign_id + tenant_id | |
+| C9 | Call recording: configurable audio stream to S3 via multipart upload | |
+| C10 | Usage metering: emit call_minutes + recording_bytes on session end | |
+
+#### Phase D — Campaign Scheduler
+
+| # | Task | Status |
+|---|---|---|
+| D1 | Create `crates/scheduler` binary — apalis with PG backend | |
+| D2 | Outbound dialer job: pick pending contacts, originate calls via ARI REST | |
+| D3 | Retry logic: exponential backoff, max attempts, update contact status | |
+| D4 | Schedule enforcement: time windows, timezone-aware (chrono-tz) | |
+| D5 | Rate limiting: calls per minute per campaign | |
+| D6 | Campaign completion detection: all contacts processed → status = completed | |
+| D7 | Post-call analysis job: LLM analysis of transcript → extract custom metrics, sentiment, summary | |
+| D8 | Post-call analysis results written to call_records.analysis JSONB | |
+
+#### Phase E — Dashboard Frontend
+
+| # | Task | Status |
+|---|---|---|
+| E1 | Scaffold Next.js 15 + TS + Tailwind v4 + shadcn/ui + TanStack Query in `dashboard/` | |
+| E2 | Auth flow: login page, httpOnly cookie JWT, middleware route protection | |
+| E3 | API proxy routes: catch-all `/api/proxy/[...path]` → Rust API | |
+| E4 | SSE proxy route: streaming passthrough for live metrics | |
+| E5 | Overview page: campaign cards, call volume chart, active calls count (SSE) | |
+| E6 | Campaign list page: table with filters, create button | |
+| E7 | Campaign detail — config tab: system prompt editor, model/voice selection | |
+| E8 | Campaign detail — metrics tab: custom metrics builder | |
+| E9 | Campaign detail — contacts tab: CSV upload, contact table | |
+| E10 | Campaign detail — analytics tab: charts (recharts), metric aggregations | |
+| E11 | Campaign detail — calls tab: paginated log, transcript viewer, recording playback | |
+| E12 | Live monitor page: active calls table with SSE | |
+| E13 | Settings pages: users, providers, phone numbers, recording prefs, usage | |
+
+#### Phase F — Integration & Hardening
+
+| # | Task | Status |
+|---|---|---|
+| F1 | E2E: create campaign → activate → inbound call → CDR written → appears in dashboard | |
+| F2 | E2E: outbound campaign → scheduler dials → call completes → post-call analysis runs | |
+| F3 | Multi-tenant isolation tests: verify tenant A cannot see tenant B's data (app-level + RLS) | |
+| F4 | Recording E2E: call with recording_enabled → audio in S3 → playback from dashboard | |
+| F5 | Load test: 50 concurrent sessions across 5 tenants | |
+| F6 | Docker Compose: full stack (PG + Redis + RustFS + Speaches + Asterisk + API + Core + Scheduler + Dashboard) | |
+| F7 | Health check endpoints + readiness probes for all services | |
+| F8 | Usage tracking accuracy test: verify call minutes match actual call durations | |
+
+---
+
+### Phase Dependencies
+
+```
+Phase A (Data Layer)  ──→  Phase B (Management API)  ──→  Phase C (Stateless Core)
+                                                                  │
+                                                                  ├──→  Phase D (Scheduler)
+                                                                  │
+                                                                  └──→  Phase E (Dashboard)
+                                                                               │
+                                                                               ▼
+                                                                       Phase F (Integration)
+```
+
+- **A → B**: API needs DB, cache, auth, storage layers
+- **B → C**: Core needs campaign config API to exist (for Redis population)
+- **C → D**: Scheduler needs stateless core + CDR for post-call analysis
+- **C → E**: Dashboard needs both API and live core for SSE
+- **D ∥ E**: Scheduler and Dashboard can proceed in parallel
+- **F**: Integration testing after D and E are both functional
+
+---
+
+### Agent Skills
+
+#### Existing (in repo)
+
+| Skill | Domain |
+|---|---|
+| `rust` | Rust coding guidelines (179 rules) |
+| `rust_async` | Tokio patterns, channels, cancellation |
+| `audio_dsp` | Audio formats, codec conversion, VAD framing |
+| `robuto` | Audio resampling (rubato) |
+| `provider_integration` | OpenAI-compatible API patterns |
+| `speaches` | Speaches server: ASR, TTS, VAD, Realtime WS |
+| `orchestrator_and_pipeline_session` | State machine, session lifecycle, interrupts |
+| `websocket_transport` | WS server, binary/JSON framing |
+| `asterisk_ari` | ARI Stasis, AudioSocket, REST channel control |
+| `agent_tool_calling` | Tool loop, conversation memory, sentence-boundary TTS |
+| `configuration` | config.toml parsing, env var substitution |
+| `observability` | tracing spans, Prometheus metrics |
+| `testing_convention` | Test structure, TestAudioStream, fixtures |
+| `error_handling_and_fault_tolerance` | Error types, retry matrix, fallback providers |
+| `xphone` | Native SIP virtual phone for loadtest |
+
+#### New Skills to Create
+
+| Skill | Domain | Trigger Words |
+|---|---|---|
+| `database` | sqlx patterns, migrations, compile-time queries, transactions, connection pool, PG RLS | sqlx, migration, database, postgresql, query, transaction, pool |
+| `redis_cache` | Redis async patterns, session state, config cache, pub/sub, TTL, rate limiting | redis, cache, session state, pub/sub, TTL |
+| `rest_api` | Axum REST patterns, middleware stack, extractors, error responses, pagination, OpenAPI/utoipa | api, endpoint, REST, middleware, utoipa, pagination |
+| `auth_multi_tenant` | JWT auth, multi-tenant isolation, RBAC, password hashing, tenant context, RLS | auth, jwt, tenant, multi-tenant, rbac, login |
+| `nextjs_dashboard` | Next.js 15 App Router, thin BFF pattern, server/client components, TanStack Query, shadcn/ui, SSE, httpOnly cookie auth | next, dashboard, frontend, react, shadcn, tanstack |
+| `campaign_management` | Campaign lifecycle, custom metrics, contact lists, outbound dialing, scheduling, post-call analysis | campaign, outbound, inbound, dialer, schedule, contact, post-call |
+| `object_storage` | S3-compatible storage, aws-sdk-s3, multipart upload, presigned URLs, RustFS/MinIO | storage, s3, recording, upload, minio, rustfs |
