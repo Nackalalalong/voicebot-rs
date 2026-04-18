@@ -123,5 +123,5 @@ async fn build_platform_context(config: Arc<common::config::AppConfig>) -> Optio
         }
     };
 
-    Some(PlatformContext { config, db, redis, jwt_secret })
+    Some(PlatformContext { config, db, redis, jwt_secret, storage: None })
 }

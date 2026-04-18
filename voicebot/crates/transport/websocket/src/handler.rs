@@ -184,7 +184,7 @@ pub fn router_with_config(config: Arc<AppConfig>) -> Router {
         .with_state(config)
 }
 
-/// Platform context — optional DB, Redis, and JWT for the authenticated path.
+/// Platform context — optional DB, Redis, JWT, and S3 storage for the authenticated path.
 /// Cloned cheaply: PgPool and RedisPool are internally Arc-wrapped.
 #[derive(Clone)]
 pub struct PlatformContext {
@@ -192,6 +192,8 @@ pub struct PlatformContext {
     pub db: db::PgPool,
     pub redis: cache::RedisPool,
     pub jwt_secret: String,
+    /// Optional S3-compatible storage for call recordings.
+    pub storage: Option<storage::StorageClient>,
 }
 
 /// State tuple used by the platform-aware Axum handler.
@@ -346,6 +348,7 @@ async fn handle_connection(ws: WebSocket, app_config: Option<Arc<AppConfig>>) {
         &mut egress_rx,
         &mut ws_sink,
         &mut ws_stream,
+        None,
     )
     .await;
 
@@ -373,6 +376,7 @@ async fn handle_connection_platform(
     let mut session_system_prompt: Option<String> = None;
     let mut session_asr: Option<AsrProviderType> = None;
     let mut session_tts: Option<TtsProviderType> = None;
+    let mut recording_enabled = false;
 
     if let Some(cid) = campaign_id {
         let mut redis = platform.redis.clone();
@@ -399,6 +403,7 @@ async fn handle_connection_platform(
             session_system_prompt = Some(c.system_prompt);
             session_asr = Some(AsrProviderType::from_str_loose(&c.asr_provider));
             session_tts = Some(TtsProviderType::from_str_loose(&c.tts_provider));
+            recording_enabled = c.recording_enabled;
         }
     }
 
@@ -484,6 +489,12 @@ async fn handle_connection_platform(
         return;
     }
 
+    let mut recording_samples: Option<Vec<i16>> = if recording_enabled {
+        Some(Vec::with_capacity(16_000 * 60)) // pre-alloc 60s
+    } else {
+        None
+    };
+
     run_ws_bridge(
         session_id,
         session_start.input_sample_rate,
@@ -491,12 +502,35 @@ async fn handle_connection_platform(
         &mut egress_rx,
         &mut ws_sink,
         &mut ws_stream,
+        recording_samples.as_mut(),
     )
     .await;
 
     // Finalize
     let stats = session.terminate().await;
     cleanup_active_session(&platform.redis, tenant_id, session_id).await;
+
+    // C9: Upload recording to S3 if enabled
+    let recording_url = if let (Some(samples), Some(storage)) = (recording_samples.as_ref(), platform.storage.as_ref()) {
+        if !samples.is_empty() {
+            let wav_bytes = encode_pcm_to_wav(samples, PIPELINE_SAMPLE_RATE);
+            let key = storage::StorageClient::recording_key(&tenant_id.to_string(), &session_id.to_string());
+            match storage.upload(&key, wav_bytes, "audio/wav").await {
+                Ok(_) => {
+                    tracing::info!(%session_id, %key, "recording uploaded to S3");
+                    Some(key)
+                }
+                Err(e) => {
+                    tracing::warn!(%session_id, error = %e, "failed to upload recording");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // Finalize CDR
     let custom_metrics = serde_json::json!({
@@ -509,13 +543,64 @@ async fn handle_connection_platform(
         &session_id.to_string(),
         "completed",
         Some(stats.duration_secs() as i32),
-        None,
+        recording_url.as_deref(),
         None,
         custom_metrics,
     )
     .await;
 
+    // C10: Write usage record
+    {
+        use chrono::Utc;
+        let ended_at = Utc::now();
+        let duration_secs = stats.duration_secs() as i64;
+        let started_at = ended_at - chrono::Duration::seconds(duration_secs);
+        let _ = db::queries::usage::record_call(
+            &platform.db,
+            tenant_id,
+            campaign_id,
+            started_at,
+            ended_at,
+            duration_secs,
+            duration_secs, // asr_seconds ≈ call duration
+            0,             // tts_characters (not tracked per-session yet)
+            0,             // llm_tokens (not tracked per-session yet)
+            0,             // cost_usd_cents (billing not implemented)
+        )
+        .await;
+    }
+
     tracing::info!(%session_id, "platform WebSocket session ended");
+}
+
+/// Encode raw 16-bit mono PCM samples at `sample_rate` Hz into a WAV byte buffer.
+fn encode_pcm_to_wav(samples: &[i16], sample_rate: u32) -> Vec<u8> {
+    let num_samples = samples.len() as u32;
+    let byte_rate = sample_rate * 2; // 1 channel * 16-bit
+    let data_bytes = num_samples * 2;
+    let total_size = 36 + data_bytes;
+
+    let mut out = Vec::with_capacity((total_size + 8) as usize);
+    // RIFF header
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&total_size.to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    // fmt chunk
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    out.extend_from_slice(&1u16.to_le_bytes());  // PCM
+    out.extend_from_slice(&1u16.to_le_bytes());  // mono
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&byte_rate.to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());  // block align
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    // data chunk
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_bytes.to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    out
 }
 
 /// Remove a session from the tenant's active-session set in Redis.
@@ -597,6 +682,8 @@ async fn wait_for_session_start(
 /// text frames or binary audio frames and sent via `ws_sink`.
 ///
 /// The loop exits on client disconnect, `session_end`, or send failure.
+/// If `recording_buf` is `Some`, decoded PCM samples are accumulated for
+/// optional post-session upload to S3.
 async fn run_ws_bridge(
     session_id: Uuid,
     input_sample_rate: u32,
@@ -604,6 +691,7 @@ async fn run_ws_bridge(
     egress_rx: &mut tokio::sync::mpsc::Receiver<PipelineEvent>,
     ws_sink: &mut futures::stream::SplitSink<WebSocket, Message>,
     ws_stream: &mut futures::stream::SplitStream<WebSocket>,
+    mut recording_buf: Option<&mut Vec<i16>>,
 ) {
     let mut decoder = match InboundAudioDecoder::new(input_sample_rate) {
         Ok(decoder) => decoder,
@@ -625,6 +713,9 @@ async fn run_ws_bridge(
                         match decoder.decode(&bytes) {
                             Ok(frames) => {
                                 for frame in frames {
+                                    if let Some(ref mut buf) = recording_buf {
+                                        buf.extend_from_slice(&frame.data);
+                                    }
                                     if audio_tx.send(frame).await.is_err() {
                                         tracing::debug!(%session_id, "audio channel closed, stopping websocket bridge");
                                         return;

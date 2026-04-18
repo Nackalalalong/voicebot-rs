@@ -9,6 +9,8 @@ voicebot-core = { path = "../../core" }
 auth = { path = "../../auth" }
 cache = { path = "../../cache" }
 db = { path = "../../db" }
+storage = { path = "../../storage" }
+chrono = { workspace = true }
 redis = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
