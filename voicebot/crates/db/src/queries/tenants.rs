@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::{
     error::{DbError, Result},
     models::{Tenant, User},
+    pool::set_tenant_context,
 };
 
 pub async fn create(pool: &PgPool, name: &str, slug: &str, plan: &str) -> Result<Tenant> {
@@ -56,6 +57,8 @@ pub async fn create_with_owner(
         }
         e => DbError::Sqlx(e),
     })?;
+
+    set_tenant_context(&mut tx, tenant.id).await?;
 
     let user = sqlx::query_as::<_, User>(
         r#"

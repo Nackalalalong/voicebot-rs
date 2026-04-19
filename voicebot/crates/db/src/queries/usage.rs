@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{error::Result, models::UsageRecord};
+use crate::{error::Result, models::UsageRecord, pool::begin_tenant_tx};
 
 pub async fn record_call(
     pool: &PgPool,
@@ -16,6 +16,7 @@ pub async fn record_call(
     llm_tokens: i64,
     cost_usd_cents: i64,
 ) -> Result<UsageRecord> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let record = sqlx::query_as::<_, UsageRecord>(
         r#"
         INSERT INTO usage_records (
@@ -37,8 +38,9 @@ pub async fn record_call(
     .bind(tts_characters)
     .bind(llm_tokens)
     .bind(cost_usd_cents)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(record)
 }
 
@@ -48,6 +50,7 @@ pub async fn aggregate(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<UsageSummary> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
         r#"
         SELECT
@@ -64,8 +67,9 @@ pub async fn aggregate(
     .bind(tenant_id)
     .bind(from)
     .bind(to)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(UsageSummary {
         call_count: row.0,

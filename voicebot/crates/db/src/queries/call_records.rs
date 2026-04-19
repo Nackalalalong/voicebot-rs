@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::{
     error::{DbError, Result},
     models::CallRecord,
+    pool::begin_tenant_tx,
 };
 
 pub struct CreateCallRecord<'a> {
@@ -16,6 +17,7 @@ pub struct CreateCallRecord<'a> {
 }
 
 pub async fn create(pool: &PgPool, req: CreateCallRecord<'_>) -> Result<CallRecord> {
+    let mut tx = begin_tenant_tx(pool, req.tenant_id).await?;
     let record = sqlx::query_as::<_, CallRecord>(
         r#"
         INSERT INTO call_records (
@@ -33,18 +35,24 @@ pub async fn create(pool: &PgPool, req: CreateCallRecord<'_>) -> Result<CallReco
     .bind(req.session_id)
     .bind(req.direction)
     .bind(req.phone_number)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(record)
 }
 
 pub async fn get_by_id(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<CallRecord> {
-    sqlx::query_as::<_, CallRecord>("SELECT * FROM call_records WHERE id = $1 AND tenant_id = $2")
-        .bind(id)
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(DbError::NotFound)
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let record = sqlx::query_as::<_, CallRecord>(
+        "SELECT * FROM call_records WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(record)
 }
 
 pub async fn get_by_session_id(pool: &PgPool, session_id: &str) -> Result<Option<CallRecord>> {
@@ -63,6 +71,7 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<CallRecord>> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = match campaign_id {
         Some(cid) => sqlx::query_as::<_, CallRecord>(
             "SELECT * FROM call_records WHERE tenant_id = $1 AND campaign_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
@@ -71,7 +80,7 @@ pub async fn list(
         .bind(cid)
         .bind(limit)
         .bind(offset)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?,
         None => sqlx::query_as::<_, CallRecord>(
             "SELECT * FROM call_records WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
@@ -79,13 +88,15 @@ pub async fn list(
         .bind(tenant_id)
         .bind(limit)
         .bind(offset)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?,
     };
+    tx.commit().await?;
     Ok(rows)
 }
 
 pub async fn count(pool: &PgPool, tenant_id: Uuid, campaign_id: Option<Uuid>) -> Result<i64> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row: (i64,) = match campaign_id {
         Some(cid) => {
             sqlx::query_as(
@@ -93,16 +104,17 @@ pub async fn count(pool: &PgPool, tenant_id: Uuid, campaign_id: Option<Uuid>) ->
             )
             .bind(tenant_id)
             .bind(cid)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?
         }
         None => {
             sqlx::query_as("SELECT COUNT(*) FROM call_records WHERE tenant_id = $1")
                 .bind(tenant_id)
-                .fetch_one(pool)
+                .fetch_one(&mut *tx)
                 .await?
         }
     };
+    tx.commit().await?;
     Ok(row.0)
 }
 
@@ -116,6 +128,7 @@ pub async fn finalize(
     transcript: Option<serde_json::Value>,
     custom_metrics: serde_json::Value,
 ) -> Result<()> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     sqlx::query(
         r#"
         UPDATE call_records
@@ -132,8 +145,9 @@ pub async fn finalize(
     .bind(custom_metrics)
     .bind(session_id)
     .bind(tenant_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -143,12 +157,14 @@ pub async fn set_sentiment(
     id: Uuid,
     sentiment: &str,
 ) -> Result<()> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     sqlx::query("UPDATE call_records SET sentiment = $1 WHERE id = $2 AND tenant_id = $3")
         .bind(sentiment)
         .bind(id)
         .bind(tenant_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -160,6 +176,7 @@ pub async fn set_analysis(
     sentiment: &str,
     custom_metrics: serde_json::Value,
 ) -> Result<()> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     sqlx::query(
         "UPDATE call_records SET sentiment = $1, custom_metrics = $2 WHERE id = $3 AND tenant_id = $4",
     )
@@ -167,8 +184,9 @@ pub async fn set_analysis(
     .bind(custom_metrics)
     .bind(id)
     .bind(tenant_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -191,6 +209,7 @@ pub async fn analytics_for_campaign(
     tenant_id: Uuid,
     campaign_id: Uuid,
 ) -> Result<CampaignAnalytics> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row = sqlx::query_as::<_, CampaignAnalytics>(
         r#"SELECT
             COUNT(*)::bigint                                      AS total_calls,
@@ -205,8 +224,9 @@ pub async fn analytics_for_campaign(
     )
     .bind(tenant_id)
     .bind(campaign_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(row)
 }
 
@@ -215,6 +235,7 @@ pub async fn sentiment_breakdown(
     tenant_id: Uuid,
     campaign_id: Uuid,
 ) -> Result<Vec<SentimentRow>> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = sqlx::query_as::<_, SentimentRow>(
         r#"SELECT COALESCE(sentiment, 'unknown') AS sentiment, COUNT(*)::bigint AS count
            FROM call_records
@@ -223,19 +244,22 @@ pub async fn sentiment_breakdown(
     )
     .bind(tenant_id)
     .bind(campaign_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(rows)
 }
 
 /// Count calls with no ended_at (currently active).
 pub async fn count_active(pool: &PgPool, tenant_id: Uuid) -> Result<i64> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(*)::bigint FROM call_records WHERE tenant_id = $1 AND ended_at IS NULL",
     )
     .bind(tenant_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(row.0)
 }
 
@@ -251,6 +275,7 @@ pub struct ActiveCallRow {
 
 /// List calls with no ended_at — used by the live monitor SSE stream.
 pub async fn list_active(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ActiveCallRow>> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = sqlx::query_as::<_, ActiveCallRow>(
         r#"SELECT session_id, phone_number, direction, campaign_id, started_at
            FROM call_records
@@ -258,7 +283,8 @@ pub async fn list_active(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<ActiveCal
            ORDER BY created_at ASC"#,
     )
     .bind(tenant_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(rows)
 }

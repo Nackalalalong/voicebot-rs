@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::{
     error::{DbError, Result},
     models::PhoneNumber,
+    pool::begin_tenant_tx,
 };
 
 pub async fn create(
@@ -15,6 +16,7 @@ pub async fn create(
     capabilities: serde_json::Value,
     monthly_cost_usd_cents: Option<i64>,
 ) -> Result<PhoneNumber> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let pn = sqlx::query_as::<_, PhoneNumber>(
         r#"
         INSERT INTO phone_numbers (
@@ -32,18 +34,22 @@ pub async fn create(
     .bind(provider_number_id)
     .bind(capabilities)
     .bind(monthly_cost_usd_cents)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(pn)
 }
 
 pub async fn get_by_id(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<PhoneNumber> {
-    sqlx::query_as::<_, PhoneNumber>("SELECT * FROM phone_numbers WHERE id = $1 AND tenant_id = $2")
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let phone_number = sqlx::query_as::<_, PhoneNumber>("SELECT * FROM phone_numbers WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?
-        .ok_or(DbError::NotFound)
+        .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(phone_number)
 }
 
 pub async fn list(
@@ -52,35 +58,41 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<PhoneNumber>> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = sqlx::query_as::<_, PhoneNumber>(
         "SELECT * FROM phone_numbers WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(tenant_id)
     .bind(limit)
     .bind(offset)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(rows)
 }
 
 pub async fn count(pool: &PgPool, tenant_id: Uuid) -> Result<i64> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM phone_numbers WHERE tenant_id = $1")
         .bind(tenant_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(row.0)
 }
 
 pub async fn delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<()> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = sqlx::query("DELETE FROM phone_numbers WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if rows == 0 {
         return Err(DbError::NotFound);
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -91,7 +103,8 @@ pub async fn assign_campaign(
     phone_number_id: Uuid,
     campaign_id: Uuid,
 ) -> Result<PhoneNumber> {
-    sqlx::query_as::<_, PhoneNumber>(
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let phone_number = sqlx::query_as::<_, PhoneNumber>(
         "UPDATE phone_numbers SET campaign_id = $1, updated_at = now()
          WHERE id = $2 AND tenant_id = $3
          RETURNING *",
@@ -99,9 +112,11 @@ pub async fn assign_campaign(
     .bind(campaign_id)
     .bind(phone_number_id)
     .bind(tenant_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
-    .ok_or(DbError::NotFound)
+    .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(phone_number)
 }
 
 /// Remove a phone number's campaign assignment.
@@ -110,14 +125,17 @@ pub async fn unassign_campaign(
     tenant_id: Uuid,
     phone_number_id: Uuid,
 ) -> Result<PhoneNumber> {
-    sqlx::query_as::<_, PhoneNumber>(
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let phone_number = sqlx::query_as::<_, PhoneNumber>(
         "UPDATE phone_numbers SET campaign_id = NULL, updated_at = now()
          WHERE id = $1 AND tenant_id = $2
          RETURNING *",
     )
     .bind(phone_number_id)
     .bind(tenant_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
-    .ok_or(DbError::NotFound)
+    .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(phone_number)
 }

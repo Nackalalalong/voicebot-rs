@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::{
     error::{DbError, Result},
     models::Contact,
+    pool::begin_tenant_tx,
 };
 
 pub struct CreateContact<'a> {
@@ -16,6 +17,7 @@ pub struct CreateContact<'a> {
 }
 
 pub async fn create(pool: &PgPool, req: CreateContact<'_>) -> Result<Contact> {
+    let mut tx = begin_tenant_tx(pool, req.tenant_id).await?;
     let contact = sqlx::query_as::<_, Contact>(
         r#"
         INSERT INTO contacts (
@@ -33,8 +35,9 @@ pub async fn create(pool: &PgPool, req: CreateContact<'_>) -> Result<Contact> {
     .bind(req.first_name)
     .bind(req.last_name)
     .bind(req.metadata)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(contact)
 }
 
@@ -44,7 +47,7 @@ pub async fn bulk_create(
     campaign_id: Uuid,
     contacts: Vec<CreateContact<'_>>,
 ) -> Result<u64> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let mut count = 0u64;
     for c in contacts {
         sqlx::query(
@@ -73,12 +76,16 @@ pub async fn bulk_create(
 }
 
 pub async fn get_by_id(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<Contact> {
-    sqlx::query_as::<_, Contact>("SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2")
-        .bind(id)
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(DbError::NotFound)
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let contact =
+        sqlx::query_as::<_, Contact>("SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(contact)
 }
 
 pub async fn list_by_campaign(
@@ -89,6 +96,7 @@ pub async fn list_by_campaign(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<Contact>> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = match status {
         Some(s) => sqlx::query_as::<_, Contact>(
             r#"SELECT * FROM contacts WHERE tenant_id = $1 AND campaign_id = $2 AND status = $3
@@ -99,7 +107,7 @@ pub async fn list_by_campaign(
         .bind(s)
         .bind(limit)
         .bind(offset)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?,
         None => sqlx::query_as::<_, Contact>(
             "SELECT * FROM contacts WHERE tenant_id = $1 AND campaign_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
@@ -108,19 +116,22 @@ pub async fn list_by_campaign(
         .bind(campaign_id)
         .bind(limit)
         .bind(offset)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?,
     };
+    tx.commit().await?;
     Ok(rows)
 }
 
 pub async fn count_by_campaign(pool: &PgPool, tenant_id: Uuid, campaign_id: Uuid) -> Result<i64> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1 AND campaign_id = $2")
             .bind(tenant_id)
             .bind(campaign_id)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?;
+    tx.commit().await?;
     Ok(row.0)
 }
 
@@ -130,6 +141,7 @@ pub async fn claim_next_pending(
     tenant_id: Uuid,
     campaign_id: Uuid,
 ) -> Result<Option<Contact>> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let contact = sqlx::query_as::<_, Contact>(
         r#"
         UPDATE contacts SET status = 'claimed', updated_at = now()
@@ -147,24 +159,27 @@ pub async fn claim_next_pending(
     )
     .bind(tenant_id)
     .bind(campaign_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(contact)
 }
 
 pub async fn update_status(pool: &PgPool, tenant_id: Uuid, id: Uuid, status: &str) -> Result<()> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = sqlx::query(
         "UPDATE contacts SET status = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3",
     )
     .bind(status)
     .bind(id)
     .bind(tenant_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     if rows == 0 {
         return Err(DbError::NotFound);
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -174,6 +189,7 @@ pub async fn mark_failed_retry(
     id: Uuid,
     next_attempt_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     sqlx::query(
         r#"
         UPDATE contacts
@@ -185,13 +201,15 @@ pub async fn mark_failed_retry(
     .bind(next_attempt_at)
     .bind(id)
     .bind(tenant_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
 /// Count contacts not yet in a terminal state for campaign completion detection.
 pub async fn count_active(pool: &PgPool, tenant_id: Uuid, campaign_id: Uuid) -> Result<i64> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(*) FROM contacts
@@ -201,7 +219,8 @@ pub async fn count_active(pool: &PgPool, tenant_id: Uuid, campaign_id: Uuid) -> 
     )
     .bind(tenant_id)
     .bind(campaign_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(row.0)
 }

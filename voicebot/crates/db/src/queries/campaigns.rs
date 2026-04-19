@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::{
     error::{DbError, Result},
     models::Campaign,
+    pool::begin_tenant_tx,
 };
 
 pub struct CreateCampaign<'a> {
@@ -24,6 +25,7 @@ pub struct CreateCampaign<'a> {
 }
 
 pub async fn create(pool: &PgPool, req: CreateCampaign<'_>) -> Result<Campaign> {
+    let mut tx = begin_tenant_tx(pool, req.tenant_id).await?;
     let campaign = sqlx::query_as::<_, Campaign>(
         r#"
         INSERT INTO campaigns (
@@ -52,18 +54,23 @@ pub async fn create(pool: &PgPool, req: CreateCampaign<'_>) -> Result<Campaign> 
     .bind(req.tools_config)
     .bind(req.custom_metrics)
     .bind(req.schedule_config)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(campaign)
 }
 
 pub async fn get_by_id(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<Campaign> {
-    sqlx::query_as::<_, Campaign>("SELECT * FROM campaigns WHERE id = $1 AND tenant_id = $2")
-        .bind(id)
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(DbError::NotFound)
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let campaign =
+        sqlx::query_as::<_, Campaign>("SELECT * FROM campaigns WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(campaign)
 }
 
 pub async fn list(
@@ -72,22 +79,26 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<Campaign>> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = sqlx::query_as::<_, Campaign>(
         "SELECT * FROM campaigns WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(tenant_id)
     .bind(limit)
     .bind(offset)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(rows)
 }
 
 pub async fn count(pool: &PgPool, tenant_id: Uuid) -> Result<i64> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM campaigns WHERE tenant_id = $1")
         .bind(tenant_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(row.0)
 }
 
@@ -97,15 +108,18 @@ pub async fn update_status(
     id: Uuid,
     status: &str,
 ) -> Result<Campaign> {
-    sqlx::query_as::<_, Campaign>(
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let campaign = sqlx::query_as::<_, Campaign>(
         "UPDATE campaigns SET status = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 RETURNING *",
     )
     .bind(status)
     .bind(id)
     .bind(tenant_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
-    .ok_or(DbError::NotFound)
+    .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(campaign)
 }
 
 pub async fn update_prompt(
@@ -114,15 +128,18 @@ pub async fn update_prompt(
     id: Uuid,
     system_prompt: &str,
 ) -> Result<Campaign> {
-    sqlx::query_as::<_, Campaign>(
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let campaign = sqlx::query_as::<_, Campaign>(
         "UPDATE campaigns SET system_prompt = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 RETURNING *",
     )
     .bind(system_prompt)
     .bind(id)
     .bind(tenant_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
-    .ok_or(DbError::NotFound)
+    .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(campaign)
 }
 
 pub async fn update_metrics(
@@ -131,7 +148,8 @@ pub async fn update_metrics(
     id: Uuid,
     custom_metrics_config: serde_json::Value,
 ) -> Result<Campaign> {
-    sqlx::query_as::<_, Campaign>(
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let campaign = sqlx::query_as::<_, Campaign>(
         "UPDATE campaigns SET custom_metrics = $1, updated_at = NOW()
          WHERE id = $2 AND tenant_id = $3
          RETURNING *",
@@ -139,20 +157,24 @@ pub async fn update_metrics(
     .bind(custom_metrics_config)
     .bind(id)
     .bind(tenant_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
-    .ok_or(DbError::NotFound)
+    .ok_or(DbError::NotFound)?;
+    tx.commit().await?;
+    Ok(campaign)
 }
 
 pub async fn delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<()> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let rows = sqlx::query("DELETE FROM campaigns WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if rows == 0 {
         return Err(DbError::NotFound);
     }
+    tx.commit().await?;
     Ok(())
 }

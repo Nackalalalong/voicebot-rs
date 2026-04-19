@@ -142,6 +142,7 @@ dependencies = [
  "futures-util",
  "metrics",
  "metrics-exporter-prometheus",
+ "reqwest",
  "serde",
  "serde_json",
  "storage",

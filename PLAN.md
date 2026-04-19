@@ -644,8 +644,8 @@ scheduler → common, db, cache, storage
 | A4 | Create `crates/cache` — Redis MultiplexedConnection, session state read/write, config cache get/set, pub/sub | ✅ Done |
 | A5 | Create `crates/auth` — JWT issue/validate, argon2 password hashing, Axum middleware (extract tenant_id + user_id from token) | ✅ Done |
 | A6 | Create `crates/storage` — S3 client abstraction, upload/download/presigned-url, bucket init | ✅ Done |
-| A7 | PostgreSQL RLS policies as defense-in-depth (SET LOCAL app.tenant_id per transaction) | 🟡 Partial — migrations exist, SET LOCAL not applied per-transaction |
-| A8 | Integration tests for DB + cache + storage layers | ❌ Not done |
+| A7 | PostgreSQL RLS policies as defense-in-depth (SET LOCAL app.tenant_id per transaction) | ✅ Done |
+| A8 | Integration tests for DB + cache + storage layers | 🟡 Partial — ignored db/cache/storage roundtrip tests added; broader scenario coverage still missing |
 
 #### Phase B — Management API
 
@@ -663,7 +663,7 @@ scheduler → common, db, cache, storage
 | B10 | SSE endpoint for live campaign metrics | ✅ Done (`/metrics/live`, `/sessions/live`) |
 | B11 | Usage tracking: record call minutes, concurrent peak, storage bytes | ✅ Done |
 | B12 | OpenAPI spec generation with utoipa | ❌ Not done |
-| B13 | API integration tests (axum-test) | ❌ Not done |
+| B13 | API integration tests (axum-test) | 🟡 Partial — tenant isolation integration test added; broader route coverage still missing |
 
 #### Phase C — Stateless Core
 
@@ -717,7 +717,7 @@ scheduler → common, db, cache, storage
 |---|---|---|
 | F1 | E2E: create campaign → activate → inbound call → CDR written → appears in dashboard | ❌ Not done |
 | F2 | E2E: outbound campaign → scheduler dials → call completes → post-call analysis runs | ❌ Not done |
-| F3 | Multi-tenant isolation tests: verify tenant A cannot see tenant B's data (app-level + RLS) | ❌ Not done |
+| F3 | Multi-tenant isolation tests: verify tenant A cannot see tenant B's data (app-level + RLS) | 🟡 Partial — campaign access covered at API layer and raw SQL RLS layer; more entity coverage still missing |
 | F4 | Recording E2E: call with recording_enabled → audio in S3 → playback from dashboard | ❌ Not done |
 | F5 | Load test: 50 concurrent sessions across 5 tenants | ❌ Not done |
 | F6 | Docker Compose: full stack (PG + Redis + RustFS + Speaches + Asterisk + API + Core + Scheduler + Dashboard) | 🟡 Partial — compose files exist, but Asterisk/live telephony path needs a working validation pass |
